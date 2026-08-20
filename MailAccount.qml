@@ -154,6 +154,7 @@ Item {
   // sanitised through the same gate as the reader and never enable images.
   property var feedBodies: ({})
   property var feedBodyLoading: ({})
+  property var feedBodyErrors: ({})
 
   property var profile: null
   readonly property string accountEmail: profile ? String(profile.email || "") : ""
@@ -636,6 +637,50 @@ Item {
     return feedBodies[key] || null
   }
 
+  function feedBodyError(id) {
+    return String(feedBodyErrors["message:" + String(id || "")] || "")
+  }
+
+  function feedBodyIsLoading(id) {
+    return feedBodyLoading["message:" + String(id || "")] === true
+  }
+
+  function finishFeedLoading(key, error) {
+    var pending = {}
+    for (var waiting in feedBodyLoading) {
+      if (waiting !== key) pending[waiting] = feedBodyLoading[waiting]
+    }
+    feedBodyLoading = pending
+    var errors = {}
+    for (var failed in feedBodyErrors) {
+      if (failed !== key) errors[failed] = feedBodyErrors[failed]
+    }
+    if (error) errors[key] = String(error)
+    feedBodyErrors = errors
+  }
+
+  function storeFeedBody(messageId, body) {
+    var source = body || ({})
+    var rawHtml = String(source.html || "")
+    var safe = Html.sanitize(rawHtml, ({
+      allowRemoteImages: false,
+      withPlainText: source.source === "html"
+    }))
+    var key = "message:" + messageId
+    var bodies = {}
+    for (var stored in feedBodies) bodies[stored] = feedBodies[stored]
+    bodies[key] = {
+      html: safe.html,
+      text: source.source === "html" && safe.plainText
+        ? safe.plainText.text : String(source.text || ""),
+      sourceHtml: rawHtml,
+      blockedImages: safe.blockedImages,
+      tooHeavy: safe.tooHeavy
+    }
+    feedBodies = bodies
+    finishFeedLoading(key, "")
+  }
+
   function loadFeedBody(id) {
     var messageId = String(id || "")
     var key = "message:" + messageId
@@ -645,38 +690,41 @@ Item {
     loading[key] = true
     feedBodyLoading = loading
 
-    apiClient.getMessage(messageId, true, function(payload, error) {
-      var pending = {}
-      for (var waiting in root.feedBodyLoading) {
-        if (waiting !== key) pending[waiting] = root.feedBodyLoading[waiting]
+    bodyCache.read(messageId, function(cached) {
+      if (cached) {
+        root.storeFeedBody(messageId, cached)
+        bodyCache.touch(messageId)
+        return
       }
-      root.feedBodyLoading = pending
-      if (error || !payload) return
 
-      var body = Mail.extractBody(payload.payload)
-      var rawHtml = Mail.extractHtml(payload.payload)
-      var safe = Html.sanitize(rawHtml, ({
-        allowRemoteImages: false,
-        withPlainText: body.source === "html"
-      }))
-      var bodies = {}
-      for (var stored in root.feedBodies) bodies[stored] = root.feedBodies[stored]
-      bodies[key] = {
-        html: safe.html,
-        text: body.source === "html" && safe.plainText ? safe.plainText.text : body.text,
-        sourceHtml: rawHtml,
-        blockedImages: safe.blockedImages,
-        tooHeavy: safe.tooHeavy
-      }
-      root.feedBodies = bodies
-      bodyCache.put(messageId, ({
-        text: bodies[key].text,
-        source: body.source,
-        html: rawHtml,
-        attachments: Mail.attachments(payload.payload),
-        images: safe.plainText ? safe.plainText.images : []
-      }))
+      apiClient.getMessage(messageId, true, function(payload, error) {
+        if (error || !payload) {
+          root.finishFeedLoading(key, error || "Could not load this Feed message")
+          return
+        }
+        var decoded = Mail.extractBody(payload.payload)
+        var rawHtml = Mail.extractHtml(payload.payload)
+        var cachedBody = {
+          text: decoded.text,
+          source: decoded.source,
+          html: rawHtml,
+          attachments: Mail.attachments(payload.payload),
+          images: []
+        }
+        root.storeFeedBody(messageId, cachedBody)
+        bodyCache.put(messageId, cachedBody)
+      })
     })
+  }
+
+  function retryFeedBody(id) {
+    var key = "message:" + String(id || "")
+    var errors = {}
+    for (var failed in feedBodyErrors) {
+      if (failed !== key) errors[failed] = feedBodyErrors[failed]
+    }
+    feedBodyErrors = errors
+    loadFeedBody(id)
   }
 
   function loadFeedRemoteImages(id) {
@@ -716,11 +764,12 @@ Item {
     detailLoading = false
   }
 
-  function selectOffset(delta) {
+  function selectOffset(delta, fromId) {
     var list = visibleMessages
     if (list.length === 0) return ""
-    var index = Model.indexById(list, selectedId)
-    var next = index < 0 ? 0 : index + Math.floor(Number(delta) || 0)
+    var index = Model.indexById(list, String(fromId || ""))
+    var step = Math.floor(Number(delta) || 0)
+    var next = index < 0 ? (step < 0 ? list.length - 1 : 0) : index + step
     if (next < 0) next = 0
     if (next > list.length - 1) next = list.length - 1
     return list[next].id

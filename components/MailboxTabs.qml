@@ -20,6 +20,28 @@ Flickable {
   signal selected(string key)
   signal chipHovered(int index, bool isHovered)
 
+  function revealCurrent() {
+    if (current === "screener" || current === "inbox") {
+      contentX = 0
+      return
+    }
+    for (var i = 0; i < mailboxes.length; i++) {
+      if (mailboxes[i].key !== current) continue
+      var item = chipRepeater.itemAt(i)
+      if (!item) return
+      var left = track.x + item.x
+      var right = left + item.width
+      if (left < contentX) contentX = Math.max(0, left)
+      else if (right > contentX + width)
+        contentX = Math.min(Math.max(0, contentWidth - width), right - width)
+      return
+    }
+  }
+
+  onCurrentChanged: Qt.callLater(revealCurrent)
+  onMailboxesChanged: Qt.callLater(revealCurrent)
+  Component.onCompleted: Qt.callLater(revealCurrent)
+
   // Scrolling a six-segment control in a narrow window is worse than not
   // offering two of the segments: All mail and Trash are places you go looking
   // for something, not places you work from, and search reaches both. The
@@ -84,6 +106,7 @@ Flickable {
       spacing: 0
 
       Repeater {
+        id: chipRepeater
         model: root.mailboxes
 
         Item {

@@ -37,7 +37,8 @@ Item {
 
   // ------------------------------------------------------------------ read
 
-  property var pendingCallback: null
+  property var readQueue: []
+  property var currentRead: null
 
   function read(id, callback) {
     var name = Cache.bodyFileName(id)
@@ -45,18 +46,25 @@ Item {
       if (typeof callback === "function") callback(null)
       return
     }
-    pendingCallback = callback
-    var wanted = directory + "/" + name
-    // Setting the same path again does not reload on its own, and reopening the
-    // message you just closed has to hit the file rather than the last answer.
-    if (reader.path === wanted) reader.reload()
-    else reader.path = wanted
+    var next = readQueue.slice()
+    next.push(({ directory: directory, name: name, callback: callback }))
+    readQueue = next
+    drainReads()
+  }
+
+  function drainReads() {
+    if (currentRead || reader.running || readQueue.length === 0) return
+    currentRead = readQueue[0]
+    readQueue = readQueue.slice(1)
+    reader.command = [script, "get", currentRead.directory, currentRead.name]
+    reader.running = true
   }
 
   function deliver(body) {
-    var callback = pendingCallback
-    pendingCallback = null
+    var callback = currentRead ? currentRead.callback : null
+    currentRead = null
     if (typeof callback === "function") callback(body)
+    drainReads()
   }
 
   // A hit is a use, and mtime is what eviction sorts on, so the file has to be
@@ -67,12 +75,13 @@ Item {
     Quickshell.execDetached([script, "touch", directory, name])
   }
 
-  FileView {
+  Process {
     id: reader
-    printErrors: false
-    onLoaded: root.deliver(Cache.parseBody(text()))
-    // Never cached, or cached under an account that has since been removed.
-    onLoadFailed: root.deliver(null)
+    stdout: StdioCollector { id: readOutput; waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      root.deliver(exitCode === 0 ? Cache.parseBody(readOutput.text) : null)
+    }
   }
 
   // ----------------------------------------------------------------- write

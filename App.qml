@@ -142,12 +142,24 @@ Item {
 
   function moveCursor(delta) {
     if (!service) return
-    var next = service.selectOffset(delta)
+    var next = service.selectOffset(delta, cursorId)
     if (next === "") return
     cursorId = next
+    Qt.callLater(followCursor)
     // Moving is not opening. This used to open whatever it landed on while the
     // reader was up, which made stepping through a list a way to mark half of
     // it read without having looked at any of it. Enter and "o" open.
+  }
+
+  function jumpCursor(toEnd) {
+    if (!service || service.messages.length === 0) return
+    cursorId = service.messages[toEnd ? service.messages.length - 1 : 0].id
+    Qt.callLater(followCursor)
+  }
+
+  function followCursor() {
+    if (showingFeed) feedView.revealCursor()
+    else list.ensureCursorVisible()
   }
 
   function startCompose(mode) {
@@ -160,7 +172,7 @@ Item {
   function actOnCursor(action) {
     if (!service || cursorId === "") return
     var wasOpen = currentView === "reader" && service.selectedId === cursorId
-    var next = service.selectOffset(1)
+    var next = service.selectOffset(1, cursorId)
     service.act(cursorId, action)
     if (wasOpen && !Model.survivesAction(service.mailboxKey, action)) {
       if (next !== "" && next !== cursorId) openMessage(next)
@@ -180,6 +192,7 @@ Item {
     backToList()
     Qt.callLater(function() {
       root.cursorId = service.messages.length > 0 ? service.messages[0].id : ""
+      root.followCursor()
     })
   }
 
@@ -493,6 +506,7 @@ Item {
               dimColor: root.dim
               panelFontFamily: root.fontFamily
               cursorId: root.cursorId
+              viewport: listFlick
               onMessageActivated: function(id) { root.openMessage(id) }
               onRowHovered: function(id, isHovered) { if (isHovered) root.cursorId = id }
               onMenuRequested: function(id, sceneX, sceneY) {
@@ -508,7 +522,8 @@ Item {
           id: feedView
           anchors.left: sidebar.visible ? sidebar.right : parent.left
           anchors.right: parent.right
-          anchors.top: parent.top
+          anchors.top: tabs.visible ? tabs.bottom : parent.top
+          anchors.topMargin: tabs.visible ? Style.space(8) : 0
           anchors.bottom: parent.bottom
           visible: root.showingFeed && root.currentView === "list"
             && !root.showPage && !root.composing
@@ -889,6 +904,7 @@ Item {
       }
 
       ShortcutHelp {
+        id: shortcutHelp
         anchors.fill: parent
         visible: root.shortcutHelpVisible
         textColor: root.foreground
@@ -916,8 +932,58 @@ Item {
 
       Shortcut { sequence: "Ctrl+K"; onActivated: searchBar.focusField() }
       Shortcut { sequence: "/"; enabled: !focusScope.typing; onActivated: searchBar.focusField() }
-      Shortcut { sequence: "j"; enabled: !focusScope.typing; onActivated: root.moveCursor(1) }
-      Shortcut { sequence: "k"; enabled: !focusScope.typing; onActivated: root.moveCursor(-1) }
+      Shortcut {
+        sequence: "j"
+        enabled: !focusScope.typing
+        onActivated: root.shortcutHelpVisible
+          ? shortcutHelp.scrollBy(Style.space(40))
+          : (root.showingFeed ? feedView.scrollBy(Style.space(40)) : root.moveCursor(1))
+      }
+      Shortcut {
+        sequence: "k"
+        enabled: !focusScope.typing
+        onActivated: root.shortcutHelpVisible
+          ? shortcutHelp.scrollBy(-Style.space(40))
+          : (root.showingFeed ? feedView.scrollBy(-Style.space(40)) : root.moveCursor(-1))
+      }
+      Shortcut {
+        sequence: "Ctrl+D"
+        enabled: !focusScope.typing
+        onActivated: root.shortcutHelpVisible
+          ? shortcutHelp.scrollBy(shortcutHelp.height / 2)
+          : (root.showingFeed ? feedView.scrollBy(feedView.height / 2) : root.moveCursor(5))
+      }
+      Shortcut {
+        sequence: "Ctrl+U"
+        enabled: !focusScope.typing
+        onActivated: root.shortcutHelpVisible
+          ? shortcutHelp.scrollBy(-shortcutHelp.height / 2)
+          : (root.showingFeed ? feedView.scrollBy(-feedView.height / 2) : root.moveCursor(-5))
+      }
+      Shortcut {
+        sequence: "g,g"
+        enabled: !focusScope.typing
+        onActivated: root.shortcutHelpVisible
+          ? shortcutHelp.scrollToEnd(false)
+          : (root.showingFeed ? feedView.scrollToEnd(false) : root.jumpCursor(false))
+      }
+      Shortcut {
+        sequence: "Shift+G"
+        enabled: !focusScope.typing
+        onActivated: root.shortcutHelpVisible
+          ? shortcutHelp.scrollToEnd(true)
+          : (root.showingFeed ? feedView.scrollToEnd(true) : root.jumpCursor(true))
+      }
+      Shortcut {
+        sequence: "Shift+J"
+        enabled: !focusScope.typing && root.showingFeed
+        onActivated: root.moveCursor(1)
+      }
+      Shortcut {
+        sequence: "Shift+K"
+        enabled: !focusScope.typing && root.showingFeed
+        onActivated: root.moveCursor(-1)
+      }
       Shortcut { sequence: "Return"; enabled: !focusScope.typing && root.currentView === "list"; onActivated: root.openMessage(root.cursorId) }
       // "o" for open, next to j/k on the home row, so the whole read cycle can
       // be driven without leaving it.
@@ -931,6 +997,21 @@ Item {
       Shortcut { sequence: "a"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("replyAll") }
       Shortcut { sequence: "f"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("forward") }
       Shortcut { sequence: "c"; enabled: !focusScope.typing; onActivated: root.startCompose("new") }
+      Shortcut {
+        sequence: "h"
+        enabled: !focusScope.typing && root.currentView === "reader"
+        onActivated: root.backToList()
+      }
+      Shortcut {
+        sequence: "v"
+        enabled: !focusScope.typing && !!root.service && root.service.workflowEnabled
+        onActivated: root.service.markWorkflowSeen(root.cursorId, true)
+      }
+      Shortcut {
+        sequence: "u"
+        enabled: !focusScope.typing && !!root.service && root.service.workflowEnabled
+        onActivated: root.service.markWorkflowSeen(root.cursorId, false)
+      }
       Shortcut { sequence: "1"; enabled: !focusScope.typing; onActivated: root.goWorkflow("inbox") }
       Shortcut { sequence: "2"; enabled: !focusScope.typing; onActivated: root.goWorkflow("feed") }
       Shortcut { sequence: "3"; enabled: !focusScope.typing; onActivated: root.goWorkflow("paper_trail") }
@@ -989,6 +1070,7 @@ Item {
       Shortcut { sequence: "Ctrl+0"; onActivated: root.bodyZoom = 1.0 }
       Shortcut { sequence: "Ctrl+/"; onActivated: root.shortcutHelpVisible = !root.shortcutHelpVisible }
       Shortcut { sequence: "Ctrl+?"; onActivated: root.shortcutHelpVisible = !root.shortcutHelpVisible }
+      Shortcut { sequence: "?"; enabled: !focusScope.typing; onActivated: root.shortcutHelpVisible = !root.shortcutHelpVisible }
       Shortcut { sequence: "F5"; onActivated: if (root.service) root.service.refresh() }
     }
   }

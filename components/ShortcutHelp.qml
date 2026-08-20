@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import qs.Commons
 import qs.Ui
 
@@ -14,10 +15,32 @@ Rectangle {
 
   signal dismissed()
 
+  function scrollBy(pixels) {
+    shortcutScroll.contentY = Math.max(0, Math.min(
+      shortcutScroll.contentHeight - shortcutScroll.height,
+      shortcutScroll.contentY + Number(pixels || 0)))
+  }
+
+  function scrollToEnd(end) {
+    shortcutScroll.contentY = end
+      ? Math.max(0, shortcutScroll.contentHeight - shortcutScroll.height)
+      : 0
+  }
+
+  onVisibleChanged: if (visible) shortcutScroll.contentY = 0
+
   readonly property var rows: [
-    { keys: "j / k", action: "Move down / up" },
+    { keys: "j / k", action: "Move rows; scroll inside Feed" },
+    { keys: "Feed J / K", action: "Next / previous Feed item" },
+    { keys: "Ctrl+d / Ctrl+u", action: "Move down / up a page" },
+    { keys: "gg / G", action: "Jump to first / last" },
     { keys: "Enter or o", action: "Open the selected message" },
-    { keys: "Esc", action: "Back to the list" },
+    { keys: "h or Esc", action: "Back to the list" },
+    { keys: "1–6 / 9", action: "Workflow views" },
+    { keys: "Screener i/f/p/x", action: "Set sender route / screen out" },
+    { keys: "List i / f / p", action: "Move this conversation only" },
+    { keys: "l / a / z", action: "Reply Later / Set Aside / Bubble Up" },
+    { keys: "v / u", action: "Workflow Seen / New" },
     { keys: "e", action: "Archive" },
     { keys: "d", action: "Move to trash" },
     { keys: "s", action: "Star or unstar" },
@@ -31,7 +54,7 @@ Rectangle {
     { keys: "Ctrl+= / Ctrl+-", action: "Zoom the message body" },
     { keys: "Ctrl+0", action: "Reset the zoom" },
     { keys: "F5", action: "Check for mail" },
-    { keys: "Ctrl+?", action: "Toggle this sheet" },
+    { keys: "? or Ctrl+?", action: "Toggle this sheet" },
     { keys: "Esc", action: "Back, or close the window" }
   ]
 
@@ -42,53 +65,65 @@ Rectangle {
     onClicked: root.dismissed()
   }
 
-  Column {
+  Flickable {
+    id: shortcutScroll
     anchors.centerIn: parent
     width: Math.min(parent.width - Style.space(80), Style.space(420))
-    spacing: Style.space(6)
+    height: Math.min(parent.height - Style.space(40), shortcutColumn.implicitHeight)
+    contentWidth: width
+    contentHeight: shortcutColumn.implicitHeight
+    clip: true
+    boundsBehavior: Flickable.StopAtBounds
+    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-    Text {
-      text: "Keyboard shortcuts"
-      color: root.textColor
-      font.family: root.panelFontFamily
-      font.pixelSize: Style.font.subtitle
-      font.bold: true
-    }
+    Column {
+      id: shortcutColumn
+      width: shortcutScroll.width - Style.space(10)
+      spacing: Style.space(6)
 
-    Item {
-      width: parent.width
-      implicitHeight: Style.space(6)
-    }
-
-    Repeater {
-      model: root.rows
+      Text {
+        text: "Keyboard shortcuts"
+        color: root.textColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.subtitle
+        font.bold: true
+      }
 
       Item {
-        required property var modelData
         width: parent.width
-        implicitHeight: Style.space(20)
+        implicitHeight: Style.space(6)
+      }
 
-        Text {
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          width: Style.space(150)
-          text: modelData.keys
-          color: root.textColor
-          font.family: root.panelFontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-        }
+      Repeater {
+        model: root.rows
 
-        Text {
-          anchors.left: parent.left
-          anchors.leftMargin: Style.space(155)
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          text: modelData.action
-          color: root.dimColor
-          font.family: root.panelFontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
+        Item {
+          required property var modelData
+          width: parent.width
+          implicitHeight: Style.space(20)
+
+          Text {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(150)
+            text: modelData.keys
+            color: root.textColor
+            font.family: root.panelFontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+
+          Text {
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(155)
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: modelData.action
+            color: root.dimColor
+            font.family: root.panelFontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
         }
       }
     }

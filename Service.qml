@@ -367,9 +367,14 @@ Item {
   function clearSelection() { if (current) current.clearSelection() }
   function showRemoteImages() { if (current) current.showRemoteImages() }
   function feedBody(id) { return current ? current.feedBody(id) : null }
+  function feedBodyError(id) { return current ? current.feedBodyError(id) : "" }
+  function feedBodyIsLoading(id) { return !!current && current.feedBodyIsLoading(id) }
   function loadFeedBody(id) { if (current) current.loadFeedBody(id) }
+  function retryFeedBody(id) { if (current) current.retryFeedBody(id) }
   function loadFeedRemoteImages(id) { if (current) current.loadFeedRemoteImages(id) }
-  function selectOffset(delta) { return current ? current.selectOffset(delta) : "" }
+  function selectOffset(delta, fromId) {
+    return current ? current.selectOffset(delta, fromId) : ""
+  }
   function selectMailbox(key) { if (current) current.selectMailbox(key) }
   function selectWorkflow(key) { if (current) current.selectWorkflow(key) }
   function search(text) { if (current) current.search(text) }

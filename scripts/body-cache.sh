@@ -15,7 +15,7 @@
 set -eu
 
 usage() {
-  printf '%s\n' 'usage: body-cache.sh put|touch|prune|clear <dir> [name] [limit]' >&2
+  printf '%s\n' 'usage: body-cache.sh get|put|touch|prune|clear <dir> [name] [limit]' >&2
   exit 2
 }
 
@@ -49,6 +49,14 @@ prune_dir() {
 umask 077
 
 case "$command" in
+  get)
+    name=${3:-}
+    safe_name "$name" || usage
+    [ -f "$dir/$name" ] || exit 4
+    IFS= read -r payload < "$dir/$name"
+    [ -n "$payload" ] || exit 3
+    printf '%s\n' "$payload"
+    ;;
   put)
     name=${3:-}
     limit=${4:-1000}

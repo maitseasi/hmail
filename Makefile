@@ -1,6 +1,6 @@
 QMLLINT := /usr/lib/qt6/bin/qmllint
 QML_FILES := Service.qml MailAccount.qml BarWidget.qml App.qml \
-	AuthManager.qml GmailApiClient.qml CacheStore.qml \
+	AuthManager.qml GmailApiClient.qml CacheStore.qml BodyCache.qml \
 	WorkflowStore.qml \
 	components/GmailIcon.qml \
 	components/MailboxSidebar.qml \
@@ -46,6 +46,7 @@ test-js:
 	node tests/test_workflow.js
 	node tests/test_workflow_store.js
 	node tests/test_feed_security.js
+	node tests/test_workflow_navigation.js
 
 test-shell:
 	python3 tests/test_qml_names.py

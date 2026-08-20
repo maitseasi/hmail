@@ -15,6 +15,7 @@ Column {
   required property color dimColor
   required property string panelFontFamily
   property string cursorId: ""
+  property var viewport: null
   readonly property string viewTitle: {
     if (!service || !service.workflowEnabled) return ""
     var labels = {
@@ -35,6 +36,19 @@ Column {
   signal messageActivated(string id)
   signal rowHovered(string id, bool isHovered)
   signal menuRequested(string id, real sceneX, real sceneY)
+
+  function ensureCursorVisible() {
+    if (!viewport || !service) return
+    var index = Model.indexById(service.messages, cursorId)
+    if (index < 0) return
+    var item = rows.itemAt(index)
+    if (!item) return
+    var top = root.y + item.y
+    var bottom = top + item.height
+    if (top < viewport.contentY) viewport.contentY = Math.max(0, top)
+    else if (bottom > viewport.contentY + viewport.height)
+      viewport.contentY = Math.max(0, bottom - viewport.height)
+  }
 
   width: parent ? parent.width : 0
   spacing: Style.space(2)
@@ -65,6 +79,7 @@ Column {
   }
 
   Repeater {
+    id: rows
     model: root.service.messages
 
     Column {

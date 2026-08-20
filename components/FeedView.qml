@@ -17,6 +17,29 @@ Item {
   signal messageActivated(string id)
   signal messageFocused(string id)
 
+  function revealCursor() {
+    if (!service) return
+    for (var i = 0; i < service.messages.length; i++) {
+      if (service.messages[i].id === cursorId) {
+        feed.currentIndex = i
+        feed.positionViewAtIndex(i, ListView.Contain)
+        return
+      }
+    }
+  }
+
+  function scrollBy(pixels) {
+    feed.contentY = Math.max(0, Math.min(
+      Math.max(0, feed.contentHeight - feed.height),
+      feed.contentY + Number(pixels || 0)))
+  }
+
+  function scrollToEnd(end) {
+    feed.contentY = end ? Math.max(0, feed.contentHeight - feed.height) : 0
+  }
+
+  onCursorIdChanged: Qt.callLater(revealCursor)
+
   ListView {
     id: feed
     anchors.fill: parent
@@ -28,18 +51,33 @@ Item {
     cacheBuffer: Style.space(500)
     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.NoButton
+      z: 10
+      onWheel: function(wheel) {
+        var amount = wheel.pixelDelta.y
+        if (amount === 0)
+          amount = (wheel.angleDelta.y / 120) * Style.space(140)
+        root.scrollBy(-amount)
+        wheel.accepted = true
+      }
+    }
+
     delegate: Rectangle {
       id: card
       required property var modelData
 
       width: feed.width - Style.space(8)
       height: content.implicitHeight + Style.space(24)
-      color: cursorId === modelData.id
+      color: root.cursorId === modelData.id
         ? Style.selectedFillFor(root.textColor, root.accentColor)
         : "transparent"
       radius: Style.cornerRadius
 
       readonly property var body: root.service.feedBody(modelData.id)
+      readonly property string bodyError: root.service.feedBodyError(modelData.id)
+      readonly property bool bodyLoading: root.service.feedBodyIsLoading(modelData.id)
 
       Component.onCompleted: root.service.loadFeedBody(modelData.id)
       onBodyChanged: if (!body) root.service.loadFeedBody(modelData.id)
@@ -91,7 +129,9 @@ Item {
         Text {
           visible: !card.body
           width: parent.width
-          text: card.modelData.snippet || "Loading message…"
+          text: card.bodyLoading
+            ? "Loading message…"
+            : (card.bodyError ? card.bodyError : (card.modelData.snippet || "Loading message…"))
           textFormat: Text.PlainText
           color: root.dimColor
           font.family: root.panelFontFamily
@@ -100,7 +140,7 @@ Item {
         }
 
         TextEdit {
-          visible: !!card.body
+          visible: !!card.body && card.body.html !== ""
           width: parent.width
           height: visible ? implicitHeight : 0
           text: card.body ? card.body.html : ""
@@ -111,6 +151,26 @@ Item {
           color: root.textColor
           font.family: root.panelFontFamily
           font.pixelSize: Style.font.bodySmall
+        }
+
+        Text {
+          visible: !!card.body && card.body.html === ""
+          width: parent.width
+          text: card.body ? card.body.text : ""
+          textFormat: Text.PlainText
+          color: root.textColor
+          font.family: root.panelFontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.Wrap
+        }
+
+        Button {
+          visible: card.bodyError !== ""
+          text: "Retry loading message"
+          foreground: root.textColor
+          bordered: true
+          fontSize: Style.font.caption
+          onClicked: root.service.retryFeedBody(card.modelData.id)
         }
 
         Button {
