@@ -15,6 +15,22 @@ Column {
   required property color dimColor
   required property string panelFontFamily
   property string cursorId: ""
+  readonly property string viewTitle: {
+    if (!service || !service.workflowEnabled) return ""
+    var labels = {
+      screener: "SCREENER",
+      inbox: "",
+      feed: "FEED",
+      paper_trail: "PAPER TRAIL",
+      reply_later: "REPLY LATER",
+      set_aside: "SET ASIDE",
+      bubble_up: "BUBBLE UP",
+      previously_seen: "PREVIOUSLY SEEN",
+      everything: "EVERYTHING"
+    }
+    return labels[service.workflowKey] !== undefined
+      ? labels[service.workflowKey] : "WORKFLOW"
+  }
 
   signal messageActivated(string id)
   signal rowHovered(string id, bool isHovered)
@@ -23,26 +39,76 @@ Column {
   width: parent ? parent.width : 0
   spacing: Style.space(2)
 
+  Text {
+    visible: root.viewTitle !== ""
+    width: parent.width
+    leftPadding: Style.space(8)
+    rightPadding: Style.space(8)
+    topPadding: Style.space(5)
+    bottomPadding: Style.space(6)
+    text: root.viewTitle
+    textFormat: Text.PlainText
+    color: root.dimColor
+    font.family: root.panelFontFamily
+    font.pixelSize: Style.font.caption
+    font.bold: true
+  }
+
+  WorkflowActionBar {
+    width: parent.width
+    service: root.service
+    messageId: root.cursorId
+    textColor: root.textColor
+    accentColor: root.accentColor
+    dimColor: root.dimColor
+    panelFontFamily: root.panelFontFamily
+  }
+
   Repeater {
     model: root.service.messages
 
-    MessageRow {
+    Column {
+      id: entry
       required property var modelData
+      required property int index
+      width: root.width
+      spacing: Style.space(2)
 
-      summary: modelData
-      textColor: root.textColor
-      accentColor: root.accentColor
-      dimColor: root.dimColor
-      panelFontFamily: root.panelFontFamily
-      hasCursor: root.cursorId === modelData.id
-      selected: root.service.selectedId === modelData.id
-      onActivated: root.messageActivated(modelData.id)
-      onStarToggled: root.service.toggleStar(modelData.id)
-      onArchiveRequested: root.service.act(modelData.id, "archive")
-      onTrashRequested: root.service.act(modelData.id, "trash")
-      onHovered: function(isHovered) { root.rowHovered(modelData.id, isHovered) }
-      onMenuRequested: function(sceneX, sceneY) {
-        root.menuRequested(modelData.id, sceneX, sceneY)
+      Text {
+        visible: root.service.workflowEnabled && root.service.workflowKey === "inbox"
+          && (entry.index === 0 || entry.index === root.service.workflowNewCount)
+        width: parent.width
+        leftPadding: Style.space(8)
+        topPadding: entry.index === 0 ? Style.space(5) : Style.space(14)
+        bottomPadding: Style.space(5)
+        text: entry.index < root.service.workflowNewCount
+          ? "NEW FOR YOU" : "PREVIOUSLY SEEN"
+        textFormat: Text.PlainText
+        color: root.dimColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+
+      MessageRow {
+        width: parent.width
+        summary: entry.modelData
+        textColor: root.textColor
+        accentColor: root.accentColor
+        dimColor: root.dimColor
+        panelFontFamily: root.panelFontFamily
+        dense: root.service.workflowEnabled && root.service.workflowKey === "paper_trail"
+        senderFirst: root.service.workflowEnabled && root.service.workflowKey === "screener"
+        hasCursor: root.cursorId === entry.modelData.id
+        selected: root.service.selectedId === entry.modelData.id
+        onActivated: root.messageActivated(entry.modelData.id)
+        onStarToggled: root.service.toggleStar(entry.modelData.id)
+        onArchiveRequested: root.service.act(entry.modelData.id, "archive")
+        onTrashRequested: root.service.act(entry.modelData.id, "trash")
+        onHovered: function(isHovered) { root.rowHovered(entry.modelData.id, isHovered) }
+        onMenuRequested: function(sceneX, sceneY) {
+          root.menuRequested(entry.modelData.id, sceneX, sceneY)
+        }
       }
     }
   }
@@ -61,7 +127,12 @@ Column {
       text: root.service.listLoading
         ? "Loading…"
         : (root.service.listLoaded
-          ? (root.service.searchQuery !== "" ? "Nothing matches that search" : "Nothing here")
+          ? (root.service.searchQuery !== "" ? "Nothing matches that search"
+            : (root.service.workflowEnabled && root.service.workflowKey === "screener"
+              ? "Nothing waiting. You're all caught up."
+              : (root.service.workflowEnabled && root.service.workflowKey === "feed"
+                ? "No senders are delivering here yet."
+                : "Nothing here")))
           : "")
       color: root.dimColor
       font.family: root.panelFontFamily

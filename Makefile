@@ -1,12 +1,15 @@
 QMLLINT := /usr/lib/qt6/bin/qmllint
 QML_FILES := Service.qml MailAccount.qml BarWidget.qml App.qml \
 	AuthManager.qml GmailApiClient.qml CacheStore.qml \
+	WorkflowStore.qml \
 	components/GmailIcon.qml \
 	components/MailboxSidebar.qml \
 	components/MailboxTabs.qml \
 	components/MessageList.qml \
 	components/MessageRow.qml \
 	components/MessageMenu.qml \
+	components/WorkflowActionBar.qml \
+	components/FeedView.qml \
 	components/ActionIcon.qml \
 	components/IconButton.qml \
 	components/IconTextButton.qml \
@@ -40,6 +43,9 @@ test-js:
 	node tests/test_cache.js
 	node tests/test_model.js
 	node tests/test_accounts.js
+	node tests/test_workflow.js
+	node tests/test_workflow_store.js
+	node tests/test_feed_security.js
 
 test-shell:
 	python3 tests/test_qml_names.py

@@ -13,6 +13,8 @@ Flickable {
   required property string panelFontFamily
   property string current: "inbox"
   property int unread: 0
+  property var entries: Model.MAILBOXES
+  property var counts: ({})
   property int cursorIndex: -1
 
   signal selected(string key)
@@ -24,7 +26,7 @@ Flickable {
   // mailbox in view is never dropped, however rarely it is used.
   readonly property bool crowded: measure.implicitWidth > width && width > 0
   readonly property var mailboxes: {
-    var all = Model.MAILBOXES
+    var all = root.entries
     if (!crowded) return all
     var out = []
     for (var i = 0; i < all.length; i++) {
@@ -53,7 +55,7 @@ Flickable {
     visible: false
     spacing: 0
     Repeater {
-      model: Model.MAILBOXES
+      model: root.entries
       Button {
         required property var modelData
         text: modelData.label
@@ -106,9 +108,11 @@ Flickable {
             anchors.fill: parent
             // Only the unread mailbox carries a count: repeating it on Inbox
             // says the same number twice, and the bar already says it once.
-            text: segment.modelData.key === "unread" && root.unread > 0
-              ? segment.modelData.label + " " + root.unread
-              : segment.modelData.label
+            text: Number(root.counts[segment.modelData.key] || 0) > 0
+              ? segment.modelData.label + " " + root.counts[segment.modelData.key]
+              : (segment.modelData.key === "unread" && root.unread > 0
+                ? segment.modelData.label + " " + root.unread
+                : segment.modelData.label)
             foreground: root.textColor
             bordered: false
             selected: root.current === segment.modelData.key

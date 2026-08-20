@@ -171,6 +171,14 @@ Item {
       })
   }
 
+  function createLabel(name, callback) {
+    return request("POST", Api.labelsPath(), null, Api.createLabelBody(name),
+      function(status, payload, error) {
+        if (typeof callback !== "function") return
+        callback(error ? null : Api.parseLabel(payload), error)
+      })
+  }
+
   function getLabelCounts(labelId, callback) {
     return request("GET", Api.labelPath(labelId), null, null,
       function(status, payload, error) {
@@ -201,6 +209,15 @@ Item {
   function batchModify(ids, addLabelIds, removeLabelIds, callback) {
     return request("POST", Api.batchModifyPath(), null, {
       ids: Array.isArray(ids) ? ids : [],
+      addLabelIds: Array.isArray(addLabelIds) ? addLabelIds : [],
+      removeLabelIds: Array.isArray(removeLabelIds) ? removeLabelIds : []
+    }, function(status, payload, error) {
+      if (typeof callback === "function") callback(payload, error)
+    })
+  }
+
+  function modifyThread(id, addLabelIds, removeLabelIds, callback) {
+    return request("POST", Api.modifyThreadPath(id), null, {
       addLabelIds: Array.isArray(addLabelIds) ? addLabelIds : [],
       removeLabelIds: Array.isArray(removeLabelIds) ? removeLabelIds : []
     }, function(status, payload, error) {

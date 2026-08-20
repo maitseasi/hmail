@@ -7,6 +7,7 @@ import "GmailApi.js" as Api
 import "Message.js" as Mail
 import "Model.js" as Model
 import "OAuth.js" as OAuth
+import "Workflow.js" as Workflow
 
 // One mailbox: its sign-in, its cache, its messages. Service.qml owns a set of
 // these and puts whichever is on screen in front of the views.
@@ -68,6 +69,7 @@ Item {
   readonly property alias auth: authManager
   readonly property alias api: apiClient
   readonly property alias cache: cacheStore
+  readonly property alias workflow: workflowStore
 
   // What the cache is keyed on. The page size is part of it: the same query at
   // a different size is a different result set, not a stale one.
@@ -78,7 +80,31 @@ Item {
   property string mailboxKey: "inbox"
   property string searchQuery: ""
   property var messages: []
+  property bool workflowEnabled: true
+  property string workflowKey: "inbox"
+  readonly property var visibleMessages: workflowEnabled && workflowStore.loaded
+    ? Workflow.messagesForView(workflowStore.store, messages, workflowKey)
+    : messages
+  readonly property var workflowNewMessages: Workflow.messagesForView(
+    workflowStore.store, messages, "new_for_you")
+  readonly property var workflowSeenMessages: Workflow.messagesForView(
+    workflowStore.store, messages, "previously_seen")
+  readonly property var workflowSenderRules: Workflow.senderRuleList(workflowStore.store)
+  readonly property var workflowCounts: ({
+    screener: Workflow.messagesForView(workflowStore.store, messages, "screener").length,
+    inbox: workflowNewMessages.length,
+    feed: Workflow.messagesForView(workflowStore.store, messages, "feed").length,
+    paper_trail: Workflow.messagesForView(workflowStore.store, messages, "paper_trail").length,
+    reply_later: Workflow.messagesForView(workflowStore.store, messages, "reply_later").length,
+    set_aside: Workflow.messagesForView(workflowStore.store, messages, "set_aside").length,
+    bubble_up: Workflow.messagesForView(workflowStore.store, messages, "bubble_up").length,
+    previously_seen: Workflow.messagesForView(workflowStore.store, messages, "previously_seen").length,
+    everything: Workflow.messagesForView(workflowStore.store, messages, "everything").length
+  })
   property var labels: []
+  property var workflowLabelIds: ({})
+  property bool workflowLabelsLoading: false
+  property var workflowMirrorQueue: []
   property string nextPageToken: ""
   property int resultEstimate: 0
   property bool listLoading: false
@@ -124,6 +150,10 @@ Item {
   property bool detailLive: false
   property var detailHandle: null
   property int detailSerial: 0
+  // Feed bodies load only when a virtualized delegate asks for one. They are
+  // sanitised through the same gate as the reader and never enable images.
+  property var feedBodies: ({})
+  property var feedBodyLoading: ({})
 
   property var profile: null
   readonly property string accountEmail: profile ? String(profile.email || "") : ""
@@ -172,7 +202,9 @@ Item {
     ? searchQuery.trim()
     : (mailboxKey === "inbox" && defaultQuery !== "" ? defaultQuery : Model.mailbox(mailboxKey).query)
   readonly property bool hasMore: nextPageToken !== ""
-  readonly property string resultSummary: Model.resultSummary(messages, resultEstimate, hasMore)
+  readonly property string resultSummary: workflowEnabled
+    ? Model.pluralize(visibleMessages.length, "conversation")
+    : Model.resultSummary(messages, resultEstimate, hasMore)
   readonly property string barTooltip: Model.barTooltip(setupState, accountEmail, inboxUnread)
 
   // The sign-in has three waits that look identical from outside: the helper
@@ -271,7 +303,90 @@ Item {
       if (error) return
       root.labels = result
       cacheStore.putLabels(result)
+      root.ensureWorkflowLabels()
     })
+  }
+
+  function ensureWorkflowLabels() {
+    if (!workflowStore.loaded || !workflowStore.store.settings.mirrorGmailLabels
+        || workflowLabelsLoading || !ready) return
+    var byName = {}
+    for (var i = 0; i < labels.length; i++) {
+      if (!labels[i].system) byName[String(labels[i].rawName || "")] = labels[i].id
+    }
+    workflowLabelIds = byName
+    var wanted = Workflow.workflowLabelNames()
+    var missing = ""
+    for (var j = 0; j < wanted.length; j++) {
+      if (!byName[wanted[j]]) {
+        missing = wanted[j]
+        break
+      }
+    }
+    if (!missing) {
+      var queued = workflowMirrorQueue
+      workflowMirrorQueue = []
+      for (var queuedIndex = 0; queuedIndex < queued.length; queuedIndex++)
+        mirrorWorkflowThread(queued[queuedIndex])
+      return
+    }
+    workflowLabelsLoading = true
+    apiClient.createLabel(missing, function(created, error) {
+      root.workflowLabelsLoading = false
+      if (error || !created) {
+        root.fail(error || "Could not create Gmail workflow labels")
+        return
+      }
+      root.labels = root.labels.concat([created])
+      cacheStore.putLabels(root.labels)
+      root.ensureWorkflowLabels()
+    })
+  }
+
+  function mirrorWorkflowThread(summary) {
+    if (!summary || !workflowStore.store.settings.mirrorGmailLabels) return
+    ensureWorkflowLabels()
+    var names = Workflow.workflowLabelNames()
+    for (var labelIndex = 0; labelIndex < names.length; labelIndex++) {
+      if (workflowLabelIds[names[labelIndex]]) continue
+      var queue = workflowMirrorQueue.slice()
+      var alreadyQueued = false
+      for (var queuedIndex = 0; queuedIndex < queue.length; queuedIndex++) {
+        if (queue[queuedIndex].id === summary.id) alreadyQueued = true
+      }
+      if (!alreadyQueued) queue.push(summary)
+      workflowMirrorQueue = queue
+      return
+    }
+    var threadId = Workflow.threadIdFor(summary)
+    var destination = Workflow.classifyIncoming(workflowStore.store, summary)
+    var state = workflowStore.getThreadState(threadId)
+    var change = Workflow.workflowLabelChanges(summary.labelIds,
+      workflowLabelIds, destination, state)
+    if (change.add.length === 0 && change.remove.length === 0) return
+    apiClient.modifyThread(threadId, change.add, change.remove, function(payload, error) {
+      workflowStore.setThreadState(threadId, { syncPending: !!error })
+      if (error) root.fail(error)
+    })
+  }
+
+  function setWorkflowMirroring(enabled) {
+    if (!workflowStore.setSetting("mirrorGmailLabels", enabled === true)) return
+    if (enabled) ensureWorkflowLabels()
+  }
+
+  function initializeExistingWorkflow() {
+    if (workflowStore.initializeExistingInbox(messages))
+      note("Loaded Inbox moved to Previously Seen")
+  }
+
+  function initializeWorkflowIfNeeded() {
+    if (!workflowStore.loaded || !workflowStore.writable || messages.length === 0
+        || workflowStore.store.settings.initialized === true) return
+    // Any existing rule means the user has already started screening. Automatic
+    // onboarding is only for a truly untouched workflow store.
+    if (Workflow.senderRuleList(workflowStore.store).length > 0) return
+    initializeExistingWorkflow()
   }
 
   // Paints whatever the last visit to this query left behind. Switching
@@ -387,10 +502,16 @@ Item {
     notificationsPrimed = true
 
     messages = merged
+    initializeWorkflowIfNeeded()
     listLoaded = true
     lastError = ""
     lastSyncedMs = Date.now()
     listRefreshed()
+
+    if (workflowStore.store.settings.mirrorGmailLabels) {
+      for (var mirrorIndex = 0; mirrorIndex < summaries.length; mirrorIndex++)
+        mirrorWorkflowThread(summaries[mirrorIndex])
+    }
 
     if (notifyNewMail && arrivals.length > 0) notify(arrivals)
   }
@@ -409,6 +530,11 @@ Item {
       return
     }
     selectedId = messageId
+    var summaryIndex = Model.indexById(messages, messageId)
+    if (workflowEnabled && summaryIndex >= 0) {
+      var summary = messages[summaryIndex]
+      workflowStore.markSeen(Workflow.threadIdFor(summary), messageId)
+    }
     var serial = ++detailSerial
     apiClient.abortRequest(detailHandle)
     selectedMessage = null
@@ -505,6 +631,72 @@ Item {
     renderSource(sourceHtml)
   }
 
+  function feedBody(id) {
+    var key = "message:" + String(id || "")
+    return feedBodies[key] || null
+  }
+
+  function loadFeedBody(id) {
+    var messageId = String(id || "")
+    var key = "message:" + messageId
+    if (!ready || messageId === "" || feedBodies[key] || feedBodyLoading[key]) return
+    var loading = {}
+    for (var existing in feedBodyLoading) loading[existing] = feedBodyLoading[existing]
+    loading[key] = true
+    feedBodyLoading = loading
+
+    apiClient.getMessage(messageId, true, function(payload, error) {
+      var pending = {}
+      for (var waiting in root.feedBodyLoading) {
+        if (waiting !== key) pending[waiting] = root.feedBodyLoading[waiting]
+      }
+      root.feedBodyLoading = pending
+      if (error || !payload) return
+
+      var body = Mail.extractBody(payload.payload)
+      var rawHtml = Mail.extractHtml(payload.payload)
+      var safe = Html.sanitize(rawHtml, ({
+        allowRemoteImages: false,
+        withPlainText: body.source === "html"
+      }))
+      var bodies = {}
+      for (var stored in root.feedBodies) bodies[stored] = root.feedBodies[stored]
+      bodies[key] = {
+        html: safe.html,
+        text: body.source === "html" && safe.plainText ? safe.plainText.text : body.text,
+        sourceHtml: rawHtml,
+        blockedImages: safe.blockedImages,
+        tooHeavy: safe.tooHeavy
+      }
+      root.feedBodies = bodies
+      bodyCache.put(messageId, ({
+        text: bodies[key].text,
+        source: body.source,
+        html: rawHtml,
+        attachments: Mail.attachments(payload.payload),
+        images: safe.plainText ? safe.plainText.images : []
+      }))
+    })
+  }
+
+  function loadFeedRemoteImages(id) {
+    var key = "message:" + String(id || "")
+    var body = feedBodies[key]
+    if (!body || !body.sourceHtml || body.blockedImages <= 0) return
+    var safe = Html.sanitize(body.sourceHtml, ({
+      allowRemoteImages: true,
+      withPlainText: false
+    }))
+    var bodies = {}
+    for (var stored in feedBodies) bodies[stored] = feedBodies[stored]
+    var updated = {}
+    for (var field in body) updated[field] = body[field]
+    updated.html = safe.html
+    updated.blockedImages = safe.blockedImages
+    bodies[key] = updated
+    feedBodies = bodies
+  }
+
   function clearSelection() {
     detailSerial++
     apiClient.abortRequest(detailHandle)
@@ -525,12 +717,13 @@ Item {
   }
 
   function selectOffset(delta) {
-    if (messages.length === 0) return ""
-    var index = Model.indexById(messages, selectedId)
+    var list = visibleMessages
+    if (list.length === 0) return ""
+    var index = Model.indexById(list, selectedId)
     var next = index < 0 ? 0 : index + Math.floor(Number(delta) || 0)
     if (next < 0) next = 0
-    if (next > messages.length - 1) next = messages.length - 1
-    return messages[next].id
+    if (next > list.length - 1) next = list.length - 1
+    return list[next].id
   }
 
   // -------------------------------------------------------------- actions
@@ -677,6 +870,11 @@ Item {
         root.fail(error)
         return
       }
+      if (values.threadId) {
+        workflowStore.setPile(values.threadId, null)
+        var seenId = payload && payload.id ? payload.id : root.selectedId
+        if (seenId) workflowStore.markSeen(values.threadId, seenId)
+      }
       root.note("Sent")
       root.replySent()
     })
@@ -707,6 +905,7 @@ Item {
   // ------------------------------------------------------------ navigation
 
   function selectMailbox(key) {
+    workflowEnabled = false
     if (mailboxKey === key && searchQuery === "") return
     mailboxKey = String(key || "inbox")
     searchQuery = ""
@@ -717,6 +916,7 @@ Item {
   }
 
   function search(text) {
+    workflowEnabled = false
     var query = String(text || "").trim()
     if (query === searchQuery) return
     searchQuery = query
@@ -724,6 +924,117 @@ Item {
     messages = []
     listLoaded = false
     loadMessages(false)
+  }
+
+  function selectWorkflow(key) {
+    var wanted = String(key || "inbox")
+    var targetMailbox = wanted === "everything" ? "all" : "inbox"
+    var needsInbox = mailboxKey !== targetMailbox || searchQuery !== ""
+    workflowEnabled = true
+    workflowKey = wanted
+    mailboxKey = targetMailbox
+    searchQuery = ""
+    clearSelection()
+    if (needsInbox) {
+      messages = []
+      listLoaded = false
+    }
+    if (!listLoaded) loadMessages(false)
+  }
+
+  function routeSender(id, destination) {
+    var index = Model.indexById(messages, id)
+    if (index < 0 || !workflowStore.writable) return
+    var summary = messages[index]
+    var wanted = String(destination || "")
+    var rule = wanted === "screened_out"
+      ? ({ decision: "screened_out", destination: null })
+      : ({ decision: "accepted", destination: wanted })
+    if (workflowStore.setSenderRule(summary.from, rule))
+      note(wanted === "screened_out" ? "Sender screened out" : "Sender moved to " + wanted.replace("_", " "))
+    mirrorWorkflowThread(summary)
+  }
+
+  function setSenderDestination(sender, destination) {
+    var wanted = String(destination || "")
+    var rule = wanted === "screened_out"
+      ? ({ decision: "screened_out", destination: null })
+      : ({ decision: "accepted", destination: wanted })
+    if (workflowStore.setSenderRule(sender, rule))
+      note(wanted === "screened_out" ? "Sender screened out" : "Sender route updated")
+  }
+
+  function forgetSender(sender) {
+    if (workflowStore.removeSenderRule(sender)) note("Sender returned to Screener")
+  }
+
+  function moveThread(id, destination) {
+    var index = Model.indexById(messages, id)
+    var wanted = String(destination || "")
+    if (index < 0 || !Workflow.validDestination(wanted)) return
+    var summary = messages[index]
+    if (workflowStore.setThreadState(Workflow.threadIdFor(summary), {
+      destinationOverride: wanted
+    })) {
+      note("Conversation moved to " + wanted.replace("_", " "))
+      mirrorWorkflowThread(summary)
+    }
+  }
+
+  function resetThreadDestination(id) {
+    var index = Model.indexById(messages, id)
+    if (index < 0) return
+    var summary = messages[index]
+    if (workflowStore.setThreadState(Workflow.threadIdFor(summary), {
+      destinationOverride: null
+    })) note("Using sender default")
+  }
+
+  function setWorkflowPile(id, pile) {
+    var index = Model.indexById(messages, id)
+    if (index < 0) return
+    if (workflowStore.setPile(Workflow.threadIdFor(messages[index]), pile)) {
+      note(pile === null ? "Returned to Inbox" : (pile === "reply_later" ? "Reply later" : "Set aside"))
+      mirrorWorkflowThread(messages[index])
+    }
+  }
+
+  function markWorkflowSeen(id, seen) {
+    var index = Model.indexById(messages, id)
+    if (index < 0) return
+    var summary = messages[index]
+    if (seen) workflowStore.markSeen(Workflow.threadIdFor(summary), summary.id)
+    else workflowStore.markUnseen(Workflow.threadIdFor(summary))
+  }
+
+  function scheduleWorkflowBubble(id, at) {
+    var index = Model.indexById(messages, id)
+    if (index < 0) return
+    if (workflowStore.scheduleBubble(Workflow.threadIdFor(messages[index]), at)) {
+      note("Bubble Up scheduled")
+      mirrorWorkflowThread(messages[index])
+    }
+  }
+
+  function cancelWorkflowBubble(id) {
+    var index = Model.indexById(messages, id)
+    if (index < 0) return
+    if (workflowStore.cancelBubble(Workflow.threadIdFor(messages[index]))) {
+      note("Bubble Up cancelled")
+      mirrorWorkflowThread(messages[index])
+    }
+  }
+
+  function processWorkflowBubbles() {
+    var due = workflowStore.processDueBubbles()
+    for (var i = 0; i < due.length; i++) {
+      for (var j = 0; j < messages.length; j++) {
+        if (Workflow.threadIdFor(messages[j]) === due[i]) {
+          mirrorWorkflowThread(messages[j])
+          break
+        }
+      }
+    }
   }
 
   function openInBrowser(id) {
@@ -838,6 +1149,16 @@ Item {
     }
   }
 
+  WorkflowStore {
+    id: workflowStore
+    accountId: root.accountId
+    onRestored: {
+      if (lastError !== "") root.fail(lastError)
+      root.initializeWorkflowIfNeeded()
+      root.processWorkflowBubbles()
+    }
+  }
+
   BodyCache {
     id: bodyCache
     pluginDir: root.pluginDir
@@ -875,5 +1196,13 @@ Item {
       root.refreshCounts()
       if (root.active && root.windowOpen) root.loadMessages(false)
     }
+  }
+
+  Timer {
+    interval: 60000
+    running: workflowStore.loaded && workflowStore.writable
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.processWorkflowBubbles()
   }
 }

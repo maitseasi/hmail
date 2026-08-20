@@ -326,10 +326,19 @@ Item {
   readonly property bool ready: !!current && current.ready
   readonly property string accountEmail: current ? current.accountEmail : ""
   readonly property int inboxUnread: current ? current.inboxUnread : 0
-  readonly property var messages: current ? current.messages : []
+  readonly property var messages: current ? current.visibleMessages : []
+  readonly property var allMessages: current ? current.messages : []
   readonly property var labels: current ? current.labels : []
   readonly property string mailboxKey: current ? current.mailboxKey : "inbox"
   readonly property string searchQuery: current ? current.searchQuery : ""
+  readonly property bool workflowEnabled: !!current && current.workflowEnabled
+  readonly property string workflowKey: current ? current.workflowKey : "inbox"
+  readonly property var workflowCounts: current ? current.workflowCounts : ({})
+  readonly property int workflowNewCount: current ? current.workflowNewMessages.length : 0
+  readonly property bool workflowWritable: !!current && current.workflow.writable
+  readonly property bool workflowMirroring: !!current
+    && current.workflow.store.settings.mirrorGmailLabels
+  readonly property var workflowSenderRules: current ? current.workflowSenderRules : []
   readonly property bool listLoading: !!current && current.listLoading
   readonly property bool listLoaded: !!current && current.listLoaded
   readonly property bool hasMore: !!current && current.hasMore
@@ -357,9 +366,26 @@ Item {
   function select(id) { if (current) current.select(id) }
   function clearSelection() { if (current) current.clearSelection() }
   function showRemoteImages() { if (current) current.showRemoteImages() }
+  function feedBody(id) { return current ? current.feedBody(id) : null }
+  function loadFeedBody(id) { if (current) current.loadFeedBody(id) }
+  function loadFeedRemoteImages(id) { if (current) current.loadFeedRemoteImages(id) }
   function selectOffset(delta) { return current ? current.selectOffset(delta) : "" }
   function selectMailbox(key) { if (current) current.selectMailbox(key) }
+  function selectWorkflow(key) { if (current) current.selectWorkflow(key) }
   function search(text) { if (current) current.search(text) }
+  function routeSender(id, destination) { if (current) current.routeSender(id, destination) }
+  function setSenderDestination(sender, destination) {
+    if (current) current.setSenderDestination(sender, destination)
+  }
+  function forgetSender(sender) { if (current) current.forgetSender(sender) }
+  function moveThread(id, destination) { if (current) current.moveThread(id, destination) }
+  function resetThreadDestination(id) { if (current) current.resetThreadDestination(id) }
+  function setWorkflowPile(id, pile) { if (current) current.setWorkflowPile(id, pile) }
+  function markWorkflowSeen(id, seen) { if (current) current.markWorkflowSeen(id, seen) }
+  function scheduleWorkflowBubble(id, at) { if (current) current.scheduleWorkflowBubble(id, at) }
+  function cancelWorkflowBubble(id) { if (current) current.cancelWorkflowBubble(id) }
+  function setWorkflowMirroring(enabled) { if (current) current.setWorkflowMirroring(enabled) }
+  function initializeExistingWorkflow() { if (current) current.initializeExistingWorkflow() }
   function act(id, action, quiet) { if (current) current.act(id, action, quiet) }
   function toggleStar(id) { if (current) current.toggleStar(id) }
   function markAllRead() { if (current) current.markAllRead() }

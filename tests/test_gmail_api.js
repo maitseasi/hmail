@@ -34,6 +34,7 @@ assert.strictEqual(
 assert.strictEqual(api.messagePath("18f3a"), "/users/me/messages/18f3a")
 assert.strictEqual(api.messagePath("a/b"), "/users/me/messages/a%2Fb")
 assert.strictEqual(api.modifyPath("18f3a"), "/users/me/messages/18f3a/modify")
+assert.strictEqual(api.modifyThreadPath("t/a"), "/users/me/threads/t%2Fa/modify")
 assert.strictEqual(api.trashPath("18f3a"), "/users/me/messages/18f3a/trash")
 assert.strictEqual(api.labelPath("INBOX"), "/users/me/labels/INBOX")
 assert.strictEqual(api.attachmentPath("m1", "a1"), "/users/me/messages/m1/attachments/a1")
@@ -108,6 +109,21 @@ assert.strictEqual(labels[0].system, true)
 assert.strictEqual(labels[0].unread, 7)
 assert.strictEqual(labels[1].name, "Receipts")
 assert.strictEqual(labels[1].system, false)
+deepEqual(api.parseLabel({ id: "Label_13", name: "Oma/Feed", type: "user" }), {
+  id: "Label_13",
+  name: "Oma/Feed",
+  rawName: "Oma/Feed",
+  system: false,
+  unread: 0,
+  total: 0,
+  threadsUnread: 0
+})
+assert.strictEqual(api.parseLabel(null), null)
+deepEqual(api.createLabelBody(" Oma/Inbox "), {
+  name: "Oma/Inbox",
+  labelListVisibility: "labelShow",
+  messageListVisibility: "show"
+})
 
 const counts = api.parseLabelCounts({ id: "INBOX", messagesUnread: 3, messagesTotal: 40, threadsUnread: 2 })
 assert.strictEqual(counts.unread, 3)

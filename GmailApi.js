@@ -119,6 +119,7 @@ function untrashPath(id) { return "/users/me/messages/" + encode(id) + "/untrash
 function batchModifyPath() { return "/users/me/messages/batchModify" }
 function sendPath() { return "/users/me/messages/send" }
 function threadPath(id) { return "/users/me/threads/" + encode(id) }
+function modifyThreadPath(id) { return "/users/me/threads/" + encode(id) + "/modify" }
 function labelsPath() { return "/users/me/labels" }
 function labelPath(id) { return "/users/me/labels/" + encode(id) }
 function profilePath() { return "/users/me/profile" }
@@ -195,6 +196,19 @@ function parseLabels(payload) {
     })
   }
   return result
+}
+
+function parseLabel(payload) {
+  var labels = parseLabels({ labels: [payload] })
+  return labels.length > 0 ? labels[0] : null
+}
+
+function createLabelBody(name) {
+  return {
+    name: String(name || "").trim(),
+    labelListVisibility: "labelShow",
+    messageListVisibility: "show"
+  }
 }
 
 function parseLabelCounts(payload) {

@@ -171,6 +171,174 @@ Column {
     foreground: root.textColor
   }
 
+  Text {
+    text: "WORKFLOW"
+    color: root.dimColor
+    font.family: root.panelFontFamily
+    font.pixelSize: Style.font.caption
+    font.letterSpacing: 1
+  }
+
+  Item {
+    width: parent.width
+    implicitHeight: Math.max(workflowText.implicitHeight, workflowButton.implicitHeight)
+
+    Column {
+      id: workflowText
+      anchors.left: parent.left
+      anchors.right: workflowButton.left
+      anchors.rightMargin: Style.space(10)
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(2)
+
+      Text {
+        width: parent.width
+        text: "Mirror workflow labels to Gmail"
+        color: root.textColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+
+      Text {
+        width: parent.width
+        text: "Optional. Local sender decisions remain canonical."
+        color: root.dimColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+    }
+
+    Button {
+      id: workflowButton
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      text: root.service && root.service.workflowMirroring ? "On" : "Off"
+      foreground: root.textColor
+      selected: root.service && root.service.workflowMirroring
+      bordered: true
+      fontSize: Style.font.bodySmall
+      enabled: root.service && root.service.workflowWritable
+      onClicked: root.service.setWorkflowMirroring(!root.service.workflowMirroring)
+    }
+  }
+
+  Button {
+    text: "Treat loaded Inbox as Previously Seen"
+    foreground: root.textColor
+    bordered: true
+    fontSize: Style.font.bodySmall
+    enabled: root.service && root.service.workflowWritable
+      && root.service.allMessages.length > 0
+    onClicked: root.service.initializeExistingWorkflow()
+  }
+
+  Text {
+    visible: root.service && root.service.workflowSenderRules.length > 0
+    text: "SCREENER HISTORY"
+    color: root.dimColor
+    font.family: root.panelFontFamily
+    font.pixelSize: Style.font.caption
+    font.letterSpacing: 1
+  }
+
+  Column {
+    visible: root.service && root.service.workflowSenderRules.length > 0
+    width: parent.width
+    spacing: Style.space(2)
+
+    Repeater {
+      model: root.service ? root.service.workflowSenderRules : []
+
+      Rectangle {
+        id: ruleRow
+        required property var modelData
+        width: parent.width
+        implicitHeight: ruleText.implicitHeight + ruleActions.implicitHeight + Style.space(14)
+        radius: Style.cornerRadius
+        color: Style.normalFillFor(root.textColor, root.accentColor)
+
+        Column {
+          id: ruleText
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.margins: Style.space(8)
+          spacing: Style.space(2)
+
+          Text {
+            width: parent.width
+            text: ruleRow.modelData.sender
+            textFormat: Text.PlainText
+            color: root.textColor
+            font.family: root.panelFontFamily
+            font.pixelSize: Style.font.bodySmall
+            elide: Text.ElideMiddle
+          }
+
+          Text {
+            width: parent.width
+            text: ruleRow.modelData.decision === "screened_out"
+              ? "Screened out" : "Delivering to " + ruleRow.modelData.destination.replace("_", " ")
+            textFormat: Text.PlainText
+            color: root.dimColor
+            font.family: root.panelFontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Row {
+          id: ruleActions
+          anchors.left: parent.left
+          anchors.bottom: parent.bottom
+          anchors.margins: Style.space(6)
+          spacing: Style.space(3)
+
+          Button {
+            text: "Inbox"
+            foreground: root.textColor
+            bordered: false
+            fontSize: Style.font.caption
+            onClicked: root.service.setSenderDestination(ruleRow.modelData.sender, "inbox")
+          }
+          Button {
+            text: "Feed"
+            foreground: root.textColor
+            bordered: false
+            fontSize: Style.font.caption
+            onClicked: root.service.setSenderDestination(ruleRow.modelData.sender, "feed")
+          }
+          Button {
+            text: "Paper"
+            foreground: root.textColor
+            bordered: false
+            fontSize: Style.font.caption
+            onClicked: root.service.setSenderDestination(ruleRow.modelData.sender, "paper_trail")
+          }
+          Button {
+            text: "No"
+            foreground: root.textColor
+            bordered: false
+            fontSize: Style.font.caption
+            onClicked: root.service.setSenderDestination(ruleRow.modelData.sender, "screened_out")
+          }
+          Button {
+            text: "Reset"
+            foreground: root.dimColor
+            bordered: false
+            fontSize: Style.font.caption
+            onClicked: root.service.forgetSender(ruleRow.modelData.sender)
+          }
+        }
+      }
+    }
+  }
+
+  PanelSeparator {
+    width: parent.width
+    foreground: root.textColor
+  }
+
   // ---------------------------------------------------------- oauth client
 
   Text {

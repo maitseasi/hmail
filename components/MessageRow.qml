@@ -15,6 +15,8 @@ Rectangle {
   required property string panelFontFamily
   property bool hasCursor: false
   property bool selected: false
+  property bool dense: false
+  property bool senderFirst: false
 
   signal activated()
   signal starToggled()
@@ -26,7 +28,7 @@ Rectangle {
   readonly property bool hot: mouse.containsMouse || hasCursor
 
   width: parent ? parent.width : 0
-  implicitHeight: body.implicitHeight + Style.space(14)
+  implicitHeight: body.implicitHeight + Style.space(dense ? 8 : 14)
   radius: Style.cornerRadius
   color: selected
     ? Style.selectedFillFor(textColor, accentColor)
@@ -57,7 +59,7 @@ Rectangle {
     anchors.left: parent.left
     anchors.leftMargin: Style.space(4)
     anchors.top: parent.top
-    anchors.topMargin: Style.space(12)
+    anchors.topMargin: Style.space(root.dense ? 8 : 12)
     width: Style.space(5)
     height: width
     radius: width / 2
@@ -92,7 +94,7 @@ Rectangle {
         // looks like markup into rich text, and rich text with an <img> in it is
         // a fetch — the same beacon the message body is stripped of.
         textFormat: Text.PlainText
-        text: root.summary.subject
+        text: root.senderFirst ? root.summary.from.display : root.summary.subject
         color: root.textColor
         font.family: root.panelFontFamily
         font.pixelSize: Style.font.body
@@ -115,7 +117,7 @@ Rectangle {
     Text {
       width: parent.width
       textFormat: Text.PlainText
-      text: root.summary.from.display
+      text: root.senderFirst ? root.summary.from.email : root.summary.from.display
       color: root.dimColor
       font.family: root.panelFontFamily
       font.pixelSize: Style.font.bodySmall
@@ -124,7 +126,7 @@ Rectangle {
 
     Text {
       width: parent.width
-      visible: root.summary.snippet !== ""
+      visible: !root.dense && root.summary.snippet !== ""
       textFormat: Text.PlainText
       text: root.summary.snippet
       color: Qt.rgba(root.textColor.r, root.textColor.g, root.textColor.b, 0.42)

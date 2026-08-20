@@ -98,6 +98,8 @@ Item {
   // Anything the window goes *into*. The mail chrome stands down for all of it.
   readonly property bool showPage: showSetup || showSettings
   readonly property bool composing: compose.opened
+  readonly property bool showingFeed: !!service && service.workflowEnabled
+    && service.workflowKey === "feed"
 
   function open(payloadJson) {
     var payload = ({})
@@ -172,6 +174,37 @@ Item {
     backToList()
   }
 
+  function goWorkflow(key) {
+    if (!service) return
+    service.selectWorkflow(key)
+    backToList()
+    Qt.callLater(function() {
+      root.cursorId = service.messages.length > 0 ? service.messages[0].id : ""
+    })
+  }
+
+  function routeCursor(destination) {
+    if (!service || cursorId === "") return
+    if (service.workflowKey === "screener") service.routeSender(cursorId, destination)
+    else service.moveThread(cursorId, destination)
+    Qt.callLater(function() {
+      root.cursorId = service.messages.length > 0 ? service.messages[0].id : ""
+    })
+  }
+
+  function pileCursor(pile) {
+    if (!service || cursorId === "") return
+    service.setWorkflowPile(cursorId, pile)
+    Qt.callLater(function() {
+      root.cursorId = service.messages.length > 0 ? service.messages[0].id : ""
+    })
+  }
+
+  function bubbleCursor() {
+    if (!service || cursorId === "") return
+    service.scheduleWorkflowBubble(cursorId, new Date(Date.now() + 24 * 60 * 60 * 1000))
+  }
+
   Connections {
     target: root.service
     ignoreUnknownSignals: true
@@ -187,6 +220,14 @@ Item {
     function onAccountAdded() {
       root.setupVisible = false
       root.settingsVisible = true
+    }
+    function onMessagesChanged() {
+      if (!root.service || root.service.messages.length === 0) {
+        root.cursorId = ""
+        return
+      }
+      if (Model.indexById(root.service.messages, root.cursorId) < 0)
+        root.cursorId = root.service.messages[0].id
     }
   }
 
@@ -382,6 +423,7 @@ Item {
           panelFontFamily: root.fontFamily
           switcherOpen: accountSwitcher.opened
           onSwitcherRequested: function(sceneX, sceneY) { accountSwitcher.openAt(sceneX, sceneY) }
+          onWorkflowSelected: function(key) { root.goWorkflow(key) }
           onMailboxSelected: function(key) { root.goMailbox(key) }
           onLabelSelected: function(labelId, name) {
             root.service.search("label:" + name)
@@ -400,9 +442,11 @@ Item {
           visible: root.compact && !root.showPage && !root.composing && root.currentView === "list"
           textColor: root.foreground
           panelFontFamily: root.fontFamily
-          current: root.service ? root.service.mailboxKey : "inbox"
-          unread: root.service ? root.service.inboxUnread : 0
-          onSelected: function(key) { root.goMailbox(key) }
+          entries: sidebar.workflowEntries
+          counts: root.service ? root.service.workflowCounts : ({})
+          current: root.service ? root.service.workflowKey : "inbox"
+          unread: 0
+          onSelected: function(key) { root.goWorkflow(key) }
         }
 
         Item {
@@ -422,7 +466,7 @@ Item {
                 Math.min(parent.width - Style.space(360),
                   root.listWidth > 0 ? root.listWidth
                     : Math.min(Style.space(460), Math.round(parent.width * 0.34))))
-          visible: width > 0 && !root.showPage && !root.composing
+          visible: width > 0 && !root.showPage && !root.composing && !root.showingFeed
 
           // The scroller fills the column so its bar sits on the column edge;
           // the breathing room is padding on the content, not a margin on the
@@ -458,6 +502,25 @@ Item {
             }
           }
 
+        }
+
+        FeedView {
+          id: feedView
+          anchors.left: sidebar.visible ? sidebar.right : parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          visible: root.showingFeed && root.currentView === "list"
+            && !root.showPage && !root.composing
+          service: root.service
+          textColor: root.foreground
+          backgroundColor: root.background
+          accentColor: root.accent
+          dimColor: root.dim
+          panelFontFamily: root.fontFamily
+          cursorId: root.cursorId
+          onMessageFocused: function(id) { root.cursorId = id }
+          onMessageActivated: function(id) { root.openMessage(id) }
         }
 
         // The divider between the list and the message, and the handle that
@@ -508,6 +571,7 @@ Item {
           anchors.top: parent.top
           anchors.bottom: parent.bottom
           visible: !root.showPage && !root.composing
+            && (!root.showingFeed || root.currentView === "reader")
             && (!root.compact || root.currentView === "reader")
           service: root.service
           textColor: root.foreground
@@ -867,10 +931,58 @@ Item {
       Shortcut { sequence: "a"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("replyAll") }
       Shortcut { sequence: "f"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("forward") }
       Shortcut { sequence: "c"; enabled: !focusScope.typing; onActivated: root.startCompose("new") }
+      Shortcut { sequence: "1"; enabled: !focusScope.typing; onActivated: root.goWorkflow("inbox") }
+      Shortcut { sequence: "2"; enabled: !focusScope.typing; onActivated: root.goWorkflow("feed") }
+      Shortcut { sequence: "3"; enabled: !focusScope.typing; onActivated: root.goWorkflow("paper_trail") }
+      Shortcut { sequence: "4"; enabled: !focusScope.typing; onActivated: root.goWorkflow("reply_later") }
+      Shortcut { sequence: "5"; enabled: !focusScope.typing; onActivated: root.goWorkflow("set_aside") }
+      Shortcut { sequence: "6"; enabled: !focusScope.typing; onActivated: root.goWorkflow("bubble_up") }
+      Shortcut { sequence: "9"; enabled: !focusScope.typing; onActivated: root.goWorkflow("previously_seen") }
+      Shortcut {
+        sequence: "x"
+        enabled: !focusScope.typing && root.currentView === "list"
+          && !!root.service && root.service.workflowEnabled && root.service.workflowKey === "screener"
+        onActivated: root.routeCursor("screened_out")
+      }
+      Shortcut {
+        sequence: "i"
+        enabled: !focusScope.typing && root.currentView === "list"
+          && !!root.service && root.service.workflowEnabled
+        onActivated: root.routeCursor("inbox")
+      }
+      Shortcut {
+        sequence: "p"
+        enabled: !focusScope.typing && root.currentView === "list"
+          && !!root.service && root.service.workflowEnabled
+        onActivated: root.routeCursor("paper_trail")
+      }
+      Shortcut {
+        sequence: "f"
+        enabled: !focusScope.typing && root.currentView === "list"
+          && !!root.service && root.service.workflowEnabled
+        onActivated: root.routeCursor("feed")
+      }
+      Shortcut {
+        sequence: "l"
+        enabled: !focusScope.typing && !!root.service && root.service.workflowEnabled
+        onActivated: root.pileCursor("reply_later")
+      }
+      Shortcut {
+        sequence: "a"
+        enabled: !focusScope.typing && root.currentView === "list"
+          && !!root.service && root.service.workflowEnabled
+        onActivated: root.pileCursor("set_aside")
+      }
+      Shortcut {
+        sequence: "z"
+        enabled: !focusScope.typing && !!root.service && root.service.workflowEnabled
+        onActivated: root.bubbleCursor()
+      }
       Shortcut { sequence: "g,i"; enabled: !focusScope.typing; onActivated: root.goMailbox("inbox") }
       Shortcut { sequence: "g,s"; enabled: !focusScope.typing; onActivated: root.goMailbox("starred") }
       Shortcut { sequence: "g,u"; enabled: !focusScope.typing; onActivated: root.goMailbox("unread") }
       Shortcut { sequence: "g,t"; enabled: !focusScope.typing; onActivated: root.goMailbox("sent") }
+      Shortcut { sequence: "g,e"; enabled: !focusScope.typing; onActivated: root.goWorkflow("everything") }
       Shortcut { sequence: "Ctrl++"; onActivated: root.zoomBy(0.1) }
       Shortcut { sequence: "Ctrl+="; onActivated: root.zoomBy(0.1) }
       Shortcut { sequence: "Ctrl+-"; onActivated: root.zoomBy(-0.1) }

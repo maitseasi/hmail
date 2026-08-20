@@ -21,6 +21,7 @@ Item {
   property bool collapsed: false
 
   signal mailboxSelected(string key)
+  signal workflowSelected(string key)
   signal labelSelected(string labelId, string name)
 
   // Forwarded to the user bar, which is the control those popups hang off.
@@ -35,6 +36,17 @@ Item {
     }
     return out
   }
+  readonly property var workflowEntries: [
+    { key: "screener", label: "Screener", icon: "eye" },
+    { key: "inbox", label: "Inbox", icon: "inbox" },
+    { key: "feed", label: "Feed", icon: "unread" },
+    { key: "paper_trail", label: "Paper Trail", icon: "archive" },
+    { key: "reply_later", label: "Reply Later", icon: "reply" },
+    { key: "set_aside", label: "Set Aside", icon: "label" },
+    { key: "bubble_up", label: "Bubble Up", icon: "refresh" },
+    { key: "previously_seen", label: "Seen", icon: "check" },
+    { key: "everything", label: "Everything", icon: "archive" }
+  ]
 
   // The rail's own edge. The list already draws one on its far side, so
   // without this the icons sit on the same surface as the messages.
@@ -66,6 +78,50 @@ Item {
       width: flick.width - Style.space(12)
       spacing: Style.space(1)
 
+      PanelSectionHeader {
+        visible: !root.collapsed
+        leftPadding: Style.space(8)
+        bottomPadding: Style.space(3)
+        text: "WORKFLOW"
+        foreground: root.textColor
+        fontFamily: root.panelFontFamily
+      }
+
+      Repeater {
+        model: root.workflowEntries
+
+        Entry {
+          required property var modelData
+          label: modelData.label
+          icon: modelData.icon
+          count: root.service && root.service.workflowCounts
+            ? Number(root.service.workflowCounts[modelData.key] || 0) : 0
+          selected: !!root.service && root.service.workflowEnabled
+            && root.service.workflowKey === modelData.key
+          onActivated: root.workflowSelected(modelData.key)
+        }
+      }
+
+      Item {
+        width: parent.width
+        implicitHeight: Style.space(12)
+
+        PanelSeparator {
+          anchors.verticalCenter: parent.verticalCenter
+          width: parent.width
+          foreground: root.textColor
+        }
+      }
+
+      PanelSectionHeader {
+        visible: !root.collapsed
+        leftPadding: Style.space(8)
+        bottomPadding: Style.space(3)
+        text: "GMAIL"
+        foreground: root.textColor
+        fontFamily: root.panelFontFamily
+      }
+
       Repeater {
         model: Model.MAILBOXES
 
@@ -79,7 +135,8 @@ Item {
           // is waiting; the labels below still count, because those are lists
           // the user built and their sizes mean something.
           count: 0
-          selected: !!root.service && root.service.mailboxKey === modelData.key
+          selected: !!root.service && !root.service.workflowEnabled
+            && root.service.mailboxKey === modelData.key
             && root.service.searchQuery === ""
           onActivated: root.mailboxSelected(modelData.key)
         }
