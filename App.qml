@@ -23,7 +23,7 @@ Item {
   property bool closingFromHost: false
 
   readonly property string pluginId: manifest && manifest.id
-    ? String(manifest.id) : "omamail"
+    ? String(manifest.id) : "hmail"
 
   readonly property color foreground: Color.foreground
   readonly property color background: Color.background
@@ -50,8 +50,7 @@ Item {
   readonly property string fontFamily: Style.font.family
 
   // Two breakpoints, not a continuum: three columns, list-plus-reader with the
-  // sidebar collapsed to a strip, and a single column that swaps list for
-  // reader.
+  // workflow sidebar hidden, and a single column that swaps list for reader.
   readonly property bool wide: window.width >= Style.space(1000)
   readonly property bool compact: window.width < Style.space(760)
 
@@ -77,13 +76,9 @@ Item {
   // moment on the status line.
   property string notice: ""
   onNoticeChanged: if (notice !== "") noticeTimer.restart()
-  // Open by default, but narrow. The longest mailbox name is "All mail" — at
-  // 11px monospace that needs about 116px including the icon, the gaps and a
-  // count, so the rail costs little enough to leave standing.
-  //
-  // The service owns it, because the service is what outlives the window: the
-  // rail used to come back open on every restart, which is a preference the
-  // user had already expressed and the window kept forgetting.
+  // The stored preference used to mean "collapse to an icon rail". It now means
+  // hide the sidebar completely; the compact workflow tabs and More browser
+  // keep every destination reachable.
   readonly property bool sidebarCollapsed: !!service && service.sidebarCollapsed
   function toggleSidebar() {
     if (service) service.setSidebarCollapsed(!service.sidebarCollapsed)
@@ -100,6 +95,14 @@ Item {
   readonly property bool composing: compose.opened
   readonly property bool showingFeed: !!service && service.workflowEnabled
     && service.workflowKey === "feed"
+  property bool powerThroughActive: false
+  // Exit power-through whenever the user navigates away.
+  onCurrentViewChanged: powerThroughActive = false
+  Connections {
+    target: root.service
+    ignoreUnknownSignals: true
+    function onWorkflowKeyChanged() { root.powerThroughActive = false }
+  }
 
   function open(payloadJson) {
     var payload = ({})
@@ -128,7 +131,6 @@ Item {
   // per-message decision about one specific message and does not.
   function openMessage(id) {
     if (!service) return
-    reader.forceRichAnyway = false
     cursorId = String(id || "")
     service.select(cursorId)
     currentView = "reader"
@@ -247,7 +249,7 @@ Item {
   FloatingWindow {
     id: window
     visible: root.opened
-    title: "Omamail"
+    title: "Hmail"
     color: root.background
     implicitWidth: Style.space(980)
     implicitHeight: Style.space(720)
@@ -266,6 +268,7 @@ Item {
       // text is being typed. The search field is the only input in this window
       // — compose is a window of its own — so it is the only thing to ask.
       readonly property bool typing: searchBar.fieldFocused || root.composing
+        || reader.replying
 
       // ------------------------------------------------------------ header
 
@@ -286,21 +289,13 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(8)
 
-          ActionIcon {
-            anchors.verticalCenter: parent.verticalCenter
-            name: "gmail"
-            iconSize: Style.font.iconLarge
-            color: root.foreground
-            brand: true
-          }
-
           Text {
             anchors.verticalCenter: parent.verticalCenter
-            visible: !root.compact
-            text: "Omamail"
+            text: "Hmail"
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.title
+            font.bold: true
           }
 
           // Next to the mark: this is the window's own menu, not an action on
@@ -426,9 +421,10 @@ Item {
           anchors.left: parent.left
           anchors.top: parent.top
           anchors.bottom: parent.bottom
-          width: root.sidebarCollapsed ? Style.space(44) : Style.space(148)
-          visible: !root.compact && !root.showPage && !root.composing
-          collapsed: root.sidebarCollapsed
+          width: Style.space(164)
+          visible: !root.compact && !root.sidebarCollapsed
+            && !root.showPage && !root.composing
+          collapsed: false
           service: root.service
           textColor: root.foreground
           accentColor: root.accent
@@ -437,10 +433,8 @@ Item {
           switcherOpen: accountSwitcher.opened
           onSwitcherRequested: function(sceneX, sceneY) { accountSwitcher.openAt(sceneX, sceneY) }
           onWorkflowSelected: function(key) { root.goWorkflow(key) }
-          onMailboxSelected: function(key) { root.goMailbox(key) }
-          onLabelSelected: function(labelId, name) {
-            root.service.search("label:" + name)
-            root.backToList()
+          onMoreRequested: function(sceneX, sceneY) {
+            mailboxMore.openAt(sceneX, sceneY)
           }
         }
 
@@ -455,11 +449,15 @@ Item {
           visible: root.compact && !root.showPage && !root.composing && root.currentView === "list"
           textColor: root.foreground
           panelFontFamily: root.fontFamily
-          entries: sidebar.workflowEntries
+          entries: sidebar.compactEntries
           counts: root.service ? root.service.workflowCounts : ({})
-          current: root.service ? root.service.workflowKey : "inbox"
+          current: root.service && root.service.workflowEnabled
+            ? root.service.workflowKey : ""
           unread: 0
           onSelected: function(key) { root.goWorkflow(key) }
+          onMoreRequested: function(sceneX, sceneY) {
+            mailboxMore.openAt(sceneX, sceneY)
+          }
         }
 
         Item {
@@ -473,17 +471,16 @@ Item {
           // column is a strip of times and initials, which is a legitimate way
           // to work when the message is what you are reading. Refusing to go
           // there was the app deciding how someone else should use their screen.
-          width: root.compact
-            ? (root.currentView === "list" ? parent.width : 0)
-            : Math.max(Style.space(100),
-                Math.min(parent.width - Style.space(360),
-                  root.listWidth > 0 ? root.listWidth
-                    : Math.min(Style.space(460), Math.round(parent.width * 0.34))))
+          width: root.powerThroughActive ? 0
+            : root.compact
+              ? (root.currentView === "list" ? parent.width : 0)
+              : Math.max(Style.space(100),
+                  Math.min(parent.width - Style.space(360),
+                    root.listWidth > 0 ? root.listWidth
+                      : Math.min(Style.space(460), Math.round(parent.width * 0.34))))
           visible: width > 0 && !root.showPage && !root.composing && !root.showingFeed
 
-          // The scroller fills the column so its bar sits on the column edge;
-          // the breathing room is padding on the content, not a margin on the
-          // viewport, which would push the bar inward with it.
+          // Normal message list
           Flickable {
             id: listFlick
             anchors.fill: parent
@@ -496,9 +493,6 @@ Item {
             MessageList {
               id: list
               y: Style.space(8)
-              // Full width, so a row's hover fill runs to the column edge the
-              // way the sidebar's does; the text inset lives inside the row.
-              // A gutter on the right keeps a row from sliding under the bar.
               width: listFlick.width - Style.space(14)
               service: root.service
               textColor: root.foreground
@@ -513,6 +507,8 @@ Item {
                 root.cursorId = id
                 rowMenu.openAt(id, sceneX, sceneY)
               }
+              onScreenerRequested: root.goWorkflow("screener")
+              onPowerThroughRequested: root.powerThroughActive = true
             }
           }
 
@@ -579,13 +575,144 @@ Item {
           }
         }
 
-        MessageReader {
+        // Power Through New — full-width centered view, same layout as Feed.
+        Item {
+          id: powerThroughPane
+          anchors.left: sidebar.visible ? sidebar.right : parent.left
+          anchors.right: parent.right
+          anchors.top: tabs.visible ? tabs.bottom : parent.top
+          anchors.bottom: parent.bottom
+          anchors.topMargin: tabs.visible ? Style.space(8) : 0
+          visible: root.powerThroughActive && !root.showPage && !root.composing
+
+          function expandCurrent() {
+            for (var i = 0; i < ptRepeater.count; i++) {
+              var item = ptRepeater.itemAt(i)
+              if (item && item.summary && item.summary.id === root.cursorId) {
+                item.toggleExpand()
+                return
+              }
+            }
+          }
+
+          function scrollBy(delta) {
+            var newY = ptFlick.contentY + delta
+            ptFlick.contentY = Math.max(0, Math.min(ptFlick.contentHeight - ptFlick.height, newY))
+          }
+
+          function moveCursor(delta) {
+            var msgs = root.service ? root.service.workflowNewMessages : []
+            if (!msgs || msgs.length === 0) return
+            var idx = -1
+            for (var i = 0; i < msgs.length; i++) {
+              if (msgs[i].id === root.cursorId) { idx = i; break }
+            }
+            if (idx < 0) idx = 0
+            else idx = Math.max(0, Math.min(msgs.length - 1, idx + delta))
+            root.cursorId = msgs[idx].id
+          }
+
+          Item {
+            id: ptTopBar
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.leftMargin: Style.space(16)
+            anchors.rightMargin: Style.space(16)
+            height: Style.space(44)
+
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(16)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "New for You"
+              textFormat: Text.PlainText
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Button {
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(14)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Done · Shift+H"
+              foreground: root.foreground
+              bordered: true
+              fontSize: Style.font.caption
+              onClicked: root.powerThroughActive = false
+            }
+          }
+
+          PanelSeparator {
+            id: ptTopSep
+            anchors.top: ptTopBar.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            foreground: root.foreground
+          }
+
+          Flickable {
+            id: ptFlick
+            anchors.top: ptTopSep.bottom
+            anchors.bottom: parent.bottom
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Math.min(parent.width - Style.space(80), Style.space(720))
+            contentWidth: width
+            contentHeight: ptCol.implicitHeight + Style.space(20)
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            Column {
+              id: ptCol
+              width: ptFlick.width
+              spacing: Style.space(14)
+              topPadding: Style.space(10)
+              bottomPadding: Style.space(10)
+
+              Repeater {
+                id: ptRepeater
+                model: root.service ? root.service.workflowNewMessages : []
+
+                FeedCard {
+                  required property var modelData
+                  width: ptCol.width
+                  summary: modelData
+                  service: root.service
+                  textColor: root.foreground
+                  backgroundColor: root.background
+                  accentColor: root.accent
+                  dimColor: root.dim
+                  panelFontFamily: root.fontFamily
+                  focused: root.cursorId === modelData.id
+                  onCardFocused: root.cursorId = modelData.id
+                }
+              }
+
+              Text {
+                visible: !root.service
+                  || root.service.workflowNewMessages.length === 0
+                width: ptCol.width
+                horizontalAlignment: Text.AlignHCenter
+                text: "No new messages \u2014 you\u2019re all caught up!"
+                textFormat: Text.PlainText
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+          }
+        }
+
+        ThreadView {
           id: reader
           anchors.left: listSplitter.visible ? listSplitter.right : parent.left
           anchors.right: parent.right
           anchors.top: parent.top
           anchors.bottom: parent.bottom
-          visible: !root.showPage && !root.composing
+          visible: !root.powerThroughActive && !root.showPage && !root.composing
             && (!root.showingFeed || root.currentView === "reader")
             && (!root.compact || root.currentView === "reader")
           service: root.service
@@ -597,13 +724,8 @@ Item {
           dimmerColor: root.dimmer
           panelFontFamily: root.fontFamily
           zoom: root.bodyZoom
-          showBack: root.compact
-          forcePlainText: root.plainTextForced
-          onTogglePlainTextRequested: root.plainTextForced = !root.plainTextForced
-          onZoomRequested: function(step) { root.zoomBy(step) }
-          onZoomResetRequested: root.bodyZoom = 1.0
           onBackRequested: root.backToList()
-          onComposeRequested: function(mode) { root.startCompose(mode) }
+          onForwardRequested: root.startCompose("forward")
           onActionRequested: function(action) {
             if (root.service && root.service.selectedId !== "") {
               root.cursorId = root.service.selectedId
@@ -848,11 +970,16 @@ Item {
         id: appMenu
         anchors.fill: parent
         textColor: root.foreground
+        accentColor: root.accent
+        dimColor: root.dim
         panelFontFamily: root.fontFamily
         signedIn: root.ready
         accountCount: root.service ? root.service.accountCount : 1
+        workflowCounts: root.service ? root.service.workflowCounts : ({})
+        onWorkflowRequested: function(key) { root.goWorkflow(key) }
         onMarkAllReadRequested: if (root.service) root.service.markAllRead()
         onOpenWebRequested: if (root.service) root.service.openWebInbox()
+        onMoreNavigationRequested: mailboxMore.openCentered()
         onShortcutsRequested: root.shortcutHelpVisible = true
         onSetupRequested: root.settingsVisible = true
         onSwitchAccountRequested: accountSwitcher.openCentered()
@@ -860,7 +987,23 @@ Item {
         onAuthorRequested: if (root.service) root.service.openAuthorPage()
       }
 
-      // Every mailbox, with its own unread count, opened from the user bar.
+      MailboxMore {
+        id: mailboxMore
+        anchors.fill: parent
+        service: root.service
+        textColor: root.foreground
+        accentColor: root.accent
+        dimColor: root.dim
+        panelFontFamily: root.fontFamily
+        onMailboxSelected: function(key) { root.goMailbox(key) }
+        onWorkflowSelected: function(key) { root.goWorkflow(key) }
+        onLabelSelected: function(labelId, name) {
+          root.service.search("label:" + name)
+          root.backToList()
+        }
+        onDismissed: Qt.callLater(function() { focusScope.forceActiveFocus() })
+      }
+
       Timer {
         id: noticeTimer
         interval: 6000
@@ -919,9 +1062,11 @@ Item {
       Keys.onEscapePressed: function(event) {
         if (root.shortcutHelpVisible) root.shortcutHelpVisible = false
         else if (rowMenu.opened) rowMenu.close()
+        else if (mailboxMore.opened) mailboxMore.close()
         else if (appMenu.opened) appMenu.close()
         else if (accountSwitcher.opened) accountSwitcher.close()
         else if (root.composing) compose.finish()
+        else if (reader.replying) reader.dismissReply()
         else if (root.currentView === "reader") root.backToList()
         else if (root.setupVisible) root.setupVisible = false
         else if (root.settingsVisible) root.settingsVisible = false
@@ -937,63 +1082,93 @@ Item {
         enabled: !focusScope.typing
         onActivated: root.shortcutHelpVisible
           ? shortcutHelp.scrollBy(Style.space(40))
-          : (root.showingFeed ? feedView.scrollBy(Style.space(40)) : root.moveCursor(1))
+          : (root.currentView === "reader" ? reader.scrollBy(Style.space(40))
+            : (root.powerThroughActive ? powerThroughPane.scrollBy(Style.space(40))
+              : (root.showingFeed ? feedView.scrollBy(Style.space(40)) : root.moveCursor(1))))
       }
       Shortcut {
         sequence: "k"
         enabled: !focusScope.typing
         onActivated: root.shortcutHelpVisible
           ? shortcutHelp.scrollBy(-Style.space(40))
-          : (root.showingFeed ? feedView.scrollBy(-Style.space(40)) : root.moveCursor(-1))
+          : (root.currentView === "reader" ? reader.scrollBy(-Style.space(40))
+            : (root.powerThroughActive ? powerThroughPane.scrollBy(-Style.space(40))
+              : (root.showingFeed ? feedView.scrollBy(-Style.space(40)) : root.moveCursor(-1))))
       }
       Shortcut {
         sequence: "Ctrl+D"
         enabled: !focusScope.typing
         onActivated: root.shortcutHelpVisible
           ? shortcutHelp.scrollBy(shortcutHelp.height / 2)
-          : (root.showingFeed ? feedView.scrollBy(feedView.height / 2) : root.moveCursor(5))
+          : (root.currentView === "reader" ? reader.scrollBy(reader.height / 2)
+            : (root.showingFeed ? feedView.scrollBy(feedView.height / 2) : root.moveCursor(5)))
       }
       Shortcut {
         sequence: "Ctrl+U"
         enabled: !focusScope.typing
         onActivated: root.shortcutHelpVisible
           ? shortcutHelp.scrollBy(-shortcutHelp.height / 2)
-          : (root.showingFeed ? feedView.scrollBy(-feedView.height / 2) : root.moveCursor(-5))
+          : (root.currentView === "reader" ? reader.scrollBy(-reader.height / 2)
+            : (root.showingFeed ? feedView.scrollBy(-feedView.height / 2) : root.moveCursor(-5)))
       }
       Shortcut {
         sequence: "g,g"
         enabled: !focusScope.typing
         onActivated: root.shortcutHelpVisible
           ? shortcutHelp.scrollToEnd(false)
-          : (root.showingFeed ? feedView.scrollToEnd(false) : root.jumpCursor(false))
+          : (root.currentView === "reader" ? reader.scrollToEnd(false)
+            : (root.showingFeed ? feedView.scrollToEnd(false) : root.jumpCursor(false)))
       }
       Shortcut {
         sequence: "Shift+G"
         enabled: !focusScope.typing
         onActivated: root.shortcutHelpVisible
           ? shortcutHelp.scrollToEnd(true)
-          : (root.showingFeed ? feedView.scrollToEnd(true) : root.jumpCursor(true))
+          : (root.currentView === "reader" ? reader.scrollToEnd(true)
+            : (root.showingFeed ? feedView.scrollToEnd(true) : root.jumpCursor(true)))
       }
       Shortcut {
         sequence: "Shift+J"
-        enabled: !focusScope.typing && root.showingFeed
-        onActivated: root.moveCursor(1)
+        enabled: !focusScope.typing
+          && (root.showingFeed || root.powerThroughActive || root.currentView === "reader")
+        onActivated: root.currentView === "reader"
+          ? reader.moveMessage(1)
+          : (root.powerThroughActive ? powerThroughPane.moveCursor(1) : root.moveCursor(1))
       }
       Shortcut {
         sequence: "Shift+K"
-        enabled: !focusScope.typing && root.showingFeed
-        onActivated: root.moveCursor(-1)
+        enabled: !focusScope.typing
+          && (root.showingFeed || root.powerThroughActive || root.currentView === "reader")
+        onActivated: root.currentView === "reader"
+          ? reader.moveMessage(-1)
+          : (root.powerThroughActive ? powerThroughPane.moveCursor(-1) : root.moveCursor(-1))
       }
-      Shortcut { sequence: "Return"; enabled: !focusScope.typing && root.currentView === "list"; onActivated: root.openMessage(root.cursorId) }
-      // "o" for open, next to j/k on the home row, so the whole read cycle can
-      // be driven without leaving it.
-      Shortcut { sequence: "o"; enabled: !focusScope.typing && root.currentView === "list"; onActivated: root.openMessage(root.cursorId) }
+      Shortcut {
+        sequence: "Return"
+        enabled: !focusScope.typing
+        onActivated: {
+          if (root.powerThroughActive) powerThroughPane.expandCurrent()
+          else if (root.showingFeed) feedView.expandCurrent()
+          else if (root.currentView === "list") root.openMessage(root.cursorId)
+        }
+      }
+      // "o" for open, same behaviour as Enter in list mode.
+      Shortcut { sequence: "o"; enabled: !focusScope.typing && root.currentView === "list" && !root.powerThroughActive && !root.showingFeed; onActivated: root.openMessage(root.cursorId) }
+      // Shift+H exits Power Through or The Feed, returning to the Imbox list.
+      Shortcut {
+        sequence: "Shift+H"
+        enabled: !focusScope.typing
+        onActivated: {
+          if (root.powerThroughActive) { root.powerThroughActive = false }
+          else if (root.showingFeed) { root.goWorkflow("inbox") }
+        }
+      }
       Shortcut { sequence: "e"; enabled: !focusScope.typing; onActivated: root.actOnCursor("archive") }
       Shortcut { sequence: "d"; enabled: !focusScope.typing; onActivated: root.actOnCursor("trash") }
       Shortcut { sequence: "s"; enabled: !focusScope.typing; onActivated: if (root.service) root.service.toggleStar(root.cursorId) }
       Shortcut { sequence: "Shift+I"; enabled: !focusScope.typing; onActivated: root.actOnCursor("markRead") }
       Shortcut { sequence: "Shift+U"; enabled: !focusScope.typing; onActivated: root.actOnCursor("markUnread") }
-      Shortcut { sequence: "r"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("reply") }
+      Shortcut { sequence: "r"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: reader.focusReply() }
       Shortcut { sequence: "a"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("replyAll") }
       Shortcut { sequence: "f"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("forward") }
       Shortcut { sequence: "c"; enabled: !focusScope.typing; onActivated: root.startCompose("new") }
@@ -1064,6 +1239,11 @@ Item {
       Shortcut { sequence: "g,u"; enabled: !focusScope.typing; onActivated: root.goMailbox("unread") }
       Shortcut { sequence: "g,t"; enabled: !focusScope.typing; onActivated: root.goMailbox("sent") }
       Shortcut { sequence: "g,e"; enabled: !focusScope.typing; onActivated: root.goWorkflow("everything") }
+      Shortcut {
+        sequence: "g,m"
+        enabled: !focusScope.typing
+        onActivated: mailboxMore.openCentered()
+      }
       Shortcut { sequence: "Ctrl++"; onActivated: root.zoomBy(0.1) }
       Shortcut { sequence: "Ctrl+="; onActivated: root.zoomBy(0.1) }
       Shortcut { sequence: "Ctrl+-"; onActivated: root.zoomBy(-0.1) }

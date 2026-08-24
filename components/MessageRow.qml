@@ -2,9 +2,9 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// One message in the list. Unread is carried by weight and by the dot on the
-// left, never by colour alone — the accent is a theme value that some themes
-// put close to the foreground.
+// One message row. Subject leads — it is what the thread is about and what
+// you scan a list for. Sender + snippet sit below in one dimmer line.
+// Unread: bold subject, bright avatar, accent dot on the avatar corner.
 Rectangle {
   id: root
 
@@ -16,6 +16,8 @@ Rectangle {
   property bool hasCursor: false
   property bool selected: false
   property bool dense: false
+  // In Screener the subject is the sender's email address; keep the prop
+  // so callers need no changes.
   property bool senderFirst: false
 
   signal activated()
@@ -26,6 +28,27 @@ Rectangle {
   signal hovered(bool isHovered)
 
   readonly property bool hot: mouse.containsMouse || hasCursor
+
+  function _avatarHue(email) {
+    var s = email || ""
+    var h = 0
+    for (var i = 0; i < s.length; i++) {
+      h = (h * 31 + s.charCodeAt(i)) % 360
+    }
+    return h / 360
+  }
+
+  function _initial(name) {
+    if (!name || name.length === 0) return "?"
+    return name.charAt(0).toUpperCase()
+  }
+
+  // Keep lightness below 0.50 so Qt.rgba(1,1,1,1) initials always contrast.
+  readonly property color avatarColor: Qt.hsla(
+    _avatarHue(root.summary.from ? root.summary.from.email : ""),
+    root.summary.unread ? 0.60 : 0.28,
+    root.summary.unread ? 0.42 : 0.46,
+    1.0)
 
   width: parent ? parent.width : 0
   implicitHeight: body.implicitHeight + Style.space(dense ? 8 : 14)
@@ -46,8 +69,6 @@ Rectangle {
         var scene = mapToGlobal(event.x, event.y)
         root.menuRequested(scene.x, scene.y)
       } else if (event.button === Qt.MiddleButton) {
-        // Middle-click archives: the one triage action worth having without
-        // moving the pointer to a button.
         root.archiveRequested()
       } else {
         root.activated()
@@ -55,91 +76,114 @@ Rectangle {
     }
   }
 
-  Rectangle {
-    anchors.left: parent.left
-    anchors.leftMargin: Style.space(4)
-    anchors.top: parent.top
-    anchors.topMargin: Style.space(root.dense ? 8 : 12)
-    width: Style.space(5)
-    height: width
-    radius: width / 2
-    visible: root.summary.unread
-    color: root.accentColor
-  }
-
-  Column {
+  Row {
     id: body
     anchors.left: parent.left
     anchors.right: actions.visible ? actions.left : parent.right
-    // Matches the reader's content inset and the header's logo, so all three
-    // columns start their text on one vertical line.
-    anchors.leftMargin: Style.space(14)
-    anchors.rightMargin: Style.space(8)
+    anchors.leftMargin: Style.space(10)
+    anchors.rightMargin: Style.space(6)
     anchors.verticalCenter: parent.verticalCenter
-    spacing: Style.space(2)
+    spacing: Style.space(10)
 
-    // The subject leads. It is what the message is, and it is what you scan a
-    // list for; the sender had the top line and the weight, which put the
-    // emphasis on who wrote rather than on what about.
+    // Sender avatar
     Item {
-      width: parent.width
-      implicitHeight: Math.max(subject.implicitHeight, time.implicitHeight)
+      anchors.verticalCenter: parent.verticalCenter
+      width: Style.space(dense ? 28 : 32)
+      height: width
 
-      Text {
-        id: subject
-        anchors.left: parent.left
-        anchors.right: time.left
-        anchors.rightMargin: Style.space(8)
-        // A stranger wrote this. Qt's default AutoText switches a string that
-        // looks like markup into rich text, and rich text with an <img> in it is
-        // a fetch — the same beacon the message body is stripped of.
-        textFormat: Text.PlainText
-        text: root.senderFirst ? root.summary.from.display : root.summary.subject
-        color: root.textColor
-        font.family: root.panelFontFamily
-        font.pixelSize: Style.font.body
-        font.bold: root.summary.unread
-        elide: Text.ElideRight
+      Rectangle {
+        anchors.fill: parent
+        radius: width / 2
+        color: root.avatarColor
+
+        Text {
+          anchors.centerIn: parent
+          text: root._initial(root.summary.from ? root.summary.from.display : "")
+          textFormat: Text.PlainText
+          color: Qt.rgba(1, 1, 1, 1)
+          font.family: root.panelFontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+        }
       }
 
-      Text {
-        id: time
+      // Unread dot — accent ring on the avatar's bottom-right corner
+      Rectangle {
+        visible: root.summary.unread
         anchors.right: parent.right
-        anchors.baseline: subject.baseline
+        anchors.bottom: parent.bottom
+        width: Style.space(8)
+        height: width
+        radius: width / 2
+        color: root.accentColor
+        border.color: root.color
+        border.width: 1
+      }
+    }
+
+    // Text: subject on top (bold if unread), sender — snippet below
+    Column {
+      anchors.verticalCenter: parent.verticalCenter
+      width: parent.width - Style.space(dense ? 28 : 32) - parent.spacing
+      spacing: Style.space(2)
+
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(subjectText.implicitHeight, timeText.implicitHeight)
+
+        Text {
+          id: subjectText
+          anchors.left: parent.left
+          anchors.right: timeText.left
+          anchors.rightMargin: Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          // Screener shows the sender name as the "subject" (what to scan for)
+          text: root.senderFirst
+            ? (root.summary.from ? root.summary.from.display : "")
+            : root.summary.subject
+          color: root.textColor
+          font.family: root.panelFontFamily
+          font.pixelSize: Style.font.body
+          font.bold: root.summary.unread
+          elide: Text.ElideRight
+        }
+
+        Text {
+          id: timeText
+          anchors.right: parent.right
+          anchors.verticalCenter: subjectText.verticalCenter
+          textFormat: Text.PlainText
+          text: root.summary.time
+          color: root.dimColor
+          font.family: root.panelFontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      // Second line: "Sender — snippet" or just the email address in Screener
+      Text {
+        width: parent.width
         textFormat: Text.PlainText
-        text: root.summary.time
-        color: root.dimColor
+        visible: !root.dense
+        text: {
+          if (root.senderFirst) {
+            return root.summary.from ? root.summary.from.email : ""
+          }
+          var name = root.summary.from ? root.summary.from.display : ""
+          var snip = root.summary.snippet || ""
+          if (name && snip) return name + " \u2014 " + snip
+          return name || snip
+        }
+        color: Qt.rgba(root.textColor.r, root.textColor.g, root.textColor.b, 0.50)
         font.family: root.panelFontFamily
         font.pixelSize: Style.font.caption
+        elide: Text.ElideRight
+        maximumLineCount: 1
       }
-    }
-
-    Text {
-      width: parent.width
-      textFormat: Text.PlainText
-      text: root.senderFirst ? root.summary.from.email : root.summary.from.display
-      color: root.dimColor
-      font.family: root.panelFontFamily
-      font.pixelSize: Style.font.bodySmall
-      elide: Text.ElideRight
-    }
-
-    Text {
-      width: parent.width
-      visible: !root.dense && root.summary.snippet !== ""
-      textFormat: Text.PlainText
-      text: root.summary.snippet
-      color: Qt.rgba(root.textColor.r, root.textColor.g, root.textColor.b, 0.42)
-      font.family: root.panelFontFamily
-      font.pixelSize: Style.font.caption
-      elide: Text.ElideRight
-      maximumLineCount: 1
     }
   }
 
-  // Row actions appear on hover or under the keyboard cursor. A starred
-  // message keeps its star visible either way, because that is state rather
-  // than an affordance.
   Row {
     id: actions
     anchors.right: parent.right

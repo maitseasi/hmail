@@ -26,6 +26,9 @@ Item {
   required property string pluginDir
   property int oauthPort: OAuth.DEFAULT_PORT
   property var scopes: OAuth.SCOPES
+  property var loginScopes: OAuth.SCOPES
+  readonly property bool driveScopeGranted:
+    String(grantedScope || "").split(/\s+/).indexOf(OAuth.DRIVE_APPDATA_SCOPE) >= 0
 
   // Which mailbox this manager signs in. An OAuth client belongs to a Cloud
   // project rather than to a mailbox, so two accounts may share one — the
@@ -87,6 +90,7 @@ Item {
   property string loginHint: ""
 
   signal loginSucceeded()
+  signal cloudConsentSucceeded()
   signal loggedOut()
   signal sessionUnavailable(string reason)
   signal credentialsSaved()
@@ -373,7 +377,7 @@ Item {
 
   // ---------------------------------------------------------------- login
 
-  function beginLogin() {
+  function beginLogin(requestedScopes) {
     if (loginBusy || refreshBusy) return
     if (!credentialsPresent) {
       lastError = "Connect a Google Cloud OAuth client first"
@@ -384,11 +388,17 @@ Item {
       return
     }
     lastError = ""
+    loginScopes = Array.isArray(requestedScopes) && requestedScopes.length > 0
+      ? requestedScopes.slice() : scopes.slice()
     loginBusy = true
     callbackHandled = false
     exchangingCode = false
     pkceGenerator.command = [pluginDir + "/scripts/pkce.sh"]
     pkceGenerator.running = true
+  }
+
+  function requestCloudAccess() {
+    beginLogin(OAuth.cloudScopes())
   }
 
   function handlePkce(raw) {
@@ -419,7 +429,7 @@ Item {
       challenge: pkceChallenge,
       state: oauthState,
       port: oauthPort,
-      scopes: scopes,
+      scopes: loginScopes,
       loginHint: loginHint
     })])
   }
@@ -473,11 +483,14 @@ Item {
       // A user can untick individual permissions on Google's consent screen.
       // The resulting token works for reading and fails at the first archive,
       // which is a far worse experience than saying so now.
-      var missing = OAuth.missingScopes(result.scope, root.scopes)
+      var missing = OAuth.missingScopes(result.scope, root.loginScopes)
       if (missing.length > 0) root.lastError = OAuth.missingScopeMessage(missing)
 
       root.finishWaiters(root.accessToken, "")
       root.loginSucceeded()
+      if (missing.length === 0
+          && root.loginScopes.indexOf(OAuth.DRIVE_APPDATA_SCOPE) >= 0)
+        root.cloudConsentSucceeded()
     })
     requestBody = ""
   }

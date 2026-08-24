@@ -16,13 +16,21 @@ Column {
   required property string panelFontFamily
   property string cursorId: ""
   property var viewport: null
+
+  readonly property bool isImbox: !!service && service.workflowEnabled
+    && service.workflowKey === "inbox"
+  readonly property bool isScreener: !!service && service.workflowEnabled
+    && service.workflowKey === "screener"
+  readonly property int screenerCount: service
+    ? Number(service.workflowCounts["screener"] || 0) : 0
+
   readonly property string viewTitle: {
     if (!service || !service.workflowEnabled) return ""
     var labels = {
       screener: "SCREENER",
       inbox: "",
-      feed: "FEED",
-      paper_trail: "PAPER TRAIL",
+      feed: "THE FEED",
+      paper_trail: "THE PAPER TRAIL",
       reply_later: "REPLY LATER",
       set_aside: "SET ASIDE",
       bubble_up: "BUBBLE UP",
@@ -36,6 +44,8 @@ Column {
   signal messageActivated(string id)
   signal rowHovered(string id, bool isHovered)
   signal menuRequested(string id, real sceneX, real sceneY)
+  signal screenerRequested()
+  signal powerThroughRequested()
 
   function ensureCursorVisible() {
     if (!viewport || !service) return
@@ -53,6 +63,47 @@ Column {
   width: parent ? parent.width : 0
   spacing: Style.space(2)
 
+  // ── Screen N first-time senders ──────────────────────────────────────
+  // Shown at the top of the Imbox whenever the Screener has new senders
+  // waiting. Not shown inside the Screener itself.
+  Item {
+    visible: root.isImbox && root.screenerCount > 0
+    width: parent.width
+    implicitHeight: Style.space(44)
+
+    Rectangle {
+      id: screenerPill
+      anchors.left: parent.left
+      anchors.leftMargin: Style.space(10)
+      anchors.verticalCenter: parent.verticalCenter
+      height: Style.space(28)
+      width: screenerPillLabel.implicitWidth + Style.space(20)
+      radius: Style.space(14)
+      color: pillHover.hovered
+        ? Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.18)
+        : Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.12)
+      border.width: 1
+      border.color: Qt.rgba(root.accentColor.r, root.accentColor.g,
+        root.accentColor.b, 0.35)
+
+      Text {
+        id: screenerPillLabel
+        anchors.centerIn: parent
+        textFormat: Text.PlainText
+        text: "\u270d Screen " + root.screenerCount
+          + (root.screenerCount === 1 ? " first-time sender" : " first-time senders")
+        color: root.accentColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+      }
+
+      HoverHandler { id: pillHover; cursorShape: Qt.PointingHandCursor }
+      TapHandler { onTapped: root.screenerRequested() }
+    }
+  }
+
+  // ── View title (non-Imbox views) ─────────────────────────────────────
   Text {
     visible: root.viewTitle !== ""
     width: parent.width
@@ -89,20 +140,56 @@ Column {
       width: root.width
       spacing: Style.space(2)
 
-      Text {
+      // ── Section headers inside the Imbox ─────────────────────────────
+      Item {
         visible: root.service.workflowEnabled && root.service.workflowKey === "inbox"
           && (entry.index === 0 || entry.index === root.service.workflowNewCount)
         width: parent.width
-        leftPadding: Style.space(8)
-        topPadding: entry.index === 0 ? Style.space(5) : Style.space(14)
-        bottomPadding: Style.space(5)
-        text: entry.index < root.service.workflowNewCount
-          ? "NEW FOR YOU" : "PREVIOUSLY SEEN"
-        textFormat: Text.PlainText
-        color: root.dimColor
-        font.family: root.panelFontFamily
-        font.pixelSize: Style.font.caption
-        font.bold: true
+        implicitHeight: Style.space(32)
+
+        Text {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          text: entry.index < root.service.workflowNewCount
+            ? "NEW FOR YOU" : "PREVIOUSLY SEEN"
+          textFormat: Text.PlainText
+          color: root.dimColor
+          font.family: root.panelFontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+
+        // "Power Through New" — only on the NEW FOR YOU header
+        Rectangle {
+          visible: entry.index === 0 && root.service.workflowNewCount > 0
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          height: Style.space(22)
+          width: ptnLabel.implicitWidth + Style.space(14)
+          radius: Style.cornerRadius
+          color: ptnHover.hovered
+            ? Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.18)
+            : Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.10)
+          border.width: 1
+          border.color: Qt.rgba(root.accentColor.r, root.accentColor.g,
+            root.accentColor.b, 0.30)
+
+          Text {
+            id: ptnLabel
+            anchors.centerIn: parent
+            text: "\uD83D\uDE80 Power Through New"
+            textFormat: Text.PlainText
+            color: root.accentColor
+            font.family: root.panelFontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          HoverHandler { id: ptnHover; cursorShape: Qt.PointingHandCursor }
+          TapHandler { onTapped: root.powerThroughRequested() }
+        }
       }
 
       MessageRow {
@@ -128,8 +215,6 @@ Column {
     }
   }
 
-  // Three states share this slot, and only one of them is an error: still
-  // loading, loaded and empty, or nothing loaded yet.
   Item {
     width: parent.width
     visible: root.service.messages.length === 0
@@ -140,14 +225,16 @@ Column {
       width: parent.width - Style.space(20)
       horizontalAlignment: Text.AlignHCenter
       text: root.service.listLoading
-        ? "Loading…"
+        ? "Loading\u2026"
         : (root.service.listLoaded
           ? (root.service.searchQuery !== "" ? "Nothing matches that search"
-            : (root.service.workflowEnabled && root.service.workflowKey === "screener"
+            : (root.isScreener
               ? "Nothing waiting. You're all caught up."
               : (root.service.workflowEnabled && root.service.workflowKey === "feed"
-                ? "No senders are delivering here yet."
-                : "Nothing here")))
+                ? "No senders in The Feed yet.\nMove a newsletter here to start."
+                : (root.service.workflowEnabled && root.service.workflowKey === "paper_trail"
+                  ? "No receipts or transactions yet."
+                  : "Nothing here"))))
           : "")
       color: root.dimColor
       font.family: root.panelFontFamily
@@ -174,7 +261,7 @@ Column {
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       visible: root.service.hasMore
-      text: root.service.listLoading ? "Loading…" : "Load more"
+      text: root.service.listLoading ? "Loading\u2026" : "Load more"
       foreground: root.textColor
       bordered: false
       fontSize: Style.font.caption

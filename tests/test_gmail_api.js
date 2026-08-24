@@ -34,15 +34,23 @@ assert.strictEqual(
 assert.strictEqual(api.messagePath("18f3a"), "/users/me/messages/18f3a")
 assert.strictEqual(api.messagePath("a/b"), "/users/me/messages/a%2Fb")
 assert.strictEqual(api.modifyPath("18f3a"), "/users/me/messages/18f3a/modify")
+assert.strictEqual(api.threadPath("t/a"), "/users/me/threads/t%2Fa")
 assert.strictEqual(api.modifyThreadPath("t/a"), "/users/me/threads/t%2Fa/modify")
 assert.strictEqual(api.trashPath("18f3a"), "/users/me/messages/18f3a/trash")
 assert.strictEqual(api.labelPath("INBOX"), "/users/me/labels/INBOX")
+assert.strictEqual(api.historyPath(), "/users/me/history")
 assert.strictEqual(api.attachmentPath("m1", "a1"), "/users/me/messages/m1/attachments/a1")
 
 deepEqual(api.listQuery("in:inbox", 25, ""), { q: "in:inbox", maxResults: 25, pageToken: "" })
 assert.strictEqual(api.listQuery("", 500).maxResults, 100, "Gmail caps maxResults at 100")
 assert.strictEqual(api.listQuery("", 0).maxResults, 25)
 assert.strictEqual(api.listQuery("  in:inbox  ").q, "in:inbox")
+deepEqual(api.historyQuery("123", "next"), {
+  startHistoryId: "123",
+  historyTypes: ["labelAdded", "labelRemoved"],
+  pageToken: "next",
+  maxResults: 100
+})
 
 // --------------------------------------------------------------- errors
 //
@@ -89,10 +97,35 @@ deepEqual(list.threadIds, ["t1", "t2"])
 assert.strictEqual(list.nextPageToken, "PAGE2")
 assert.strictEqual(list.estimate, 201)
 
+deepEqual(api.parseHistory({
+  historyId: "900",
+  nextPageToken: "more",
+  history: [{
+    labelsAdded: [{ labelIds: ["Label_feed"], messages: [
+      { id: "m1", threadId: "thread1" },
+      { id: "m2", threadId: "thread1" }
+    ] }],
+    labelsRemoved: [{ labelIds: ["Label_inbox"],
+      messages: [{ id: "m3", threadId: "thread2" }] }]
+  }]
+}), {
+  historyId: "900",
+  nextPageToken: "more",
+  threadIds: ["thread1", "thread2"],
+  latestLabelIdByThread: { thread1: "Label_feed" }
+})
+
 // An empty mailbox comes back without a `messages` key at all rather than with
 // an empty array, which is the case that crashes naive callers.
 deepEqual(api.parseMessageList({ resultSizeEstimate: 0 }).ids, [])
 deepEqual(api.parseMessageList(null).ids, [])
+const thread = api.parseThread({
+  id: "t1",
+  historyId: "h1",
+  messages: [{ id: "new", internalDate: "20" }, { id: "old", internalDate: "10" }]
+})
+assert.strictEqual(thread.id, "t1")
+deepEqual(thread.messages.map(function(message) { return message.id }), ["old", "new"])
 
 const labels = api.parseLabels({
   labels: [

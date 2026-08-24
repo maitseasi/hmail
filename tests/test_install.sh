@@ -32,10 +32,26 @@ printf 'client\n' > "$test_root/config/omarchy-gmail/credentials.json"
 printf 'cache\n' > "$test_root/cache/omarchy-gmail/inbox.json"
 XDG_CONFIG_HOME="$test_root/config" XDG_CACHE_HOME="$test_root/cache" \
   sh scripts/migrate-storage.sh
-[ -f "$test_root/config/omamail/credentials.json" ] || fail "legacy config was not moved"
-[ -f "$test_root/cache/omamail/inbox.json" ] || fail "legacy cache was not moved"
+[ -f "$test_root/config/hmail/credentials.json" ] || fail "legacy config was not moved"
+[ -f "$test_root/cache/hmail/inbox.json" ] || fail "legacy cache was not moved"
 [ ! -e "$test_root/config/omarchy-gmail" ] || fail "legacy config directory remains"
 [ ! -e "$test_root/cache/omarchy-gmail" ] || fail "legacy cache directory remains"
+
+# When both previous generations exist, the newer Omamail store becomes the
+# Hmail store; the older one is left alone rather than merged over it.
+chain_root=$(mktemp -d)
+trap 'rm -rf "$test_root" "$chain_root"' EXIT
+mkdir -p "$chain_root/config/omamail" "$chain_root/config/omarchy-gmail" \
+  "$chain_root/data/omamail/workflow"
+printf 'newer\n' > "$chain_root/config/omamail/credentials.json"
+printf 'older\n' > "$chain_root/config/omarchy-gmail/credentials.json"
+printf '{}\n' > "$chain_root/data/omamail/workflow/state.json"
+XDG_CONFIG_HOME="$chain_root/config" XDG_CACHE_HOME="$chain_root/cache" \
+  XDG_DATA_HOME="$chain_root/data" sh scripts/migrate-storage.sh
+[ "$(cat "$chain_root/config/hmail/credentials.json")" = "newer" ] \
+  || fail "the newer Omamail config must win the rename chain"
+[ -f "$chain_root/data/hmail/workflow/state.json" ] || fail "workflow data was not moved"
+[ -e "$chain_root/config/omarchy-gmail" ] || fail "the older store must not be merged away"
 
 # The keyring helper takes attribute pairs now, because keying a refresh token
 # on the OAuth client alone lets two accounts sharing one client overwrite each

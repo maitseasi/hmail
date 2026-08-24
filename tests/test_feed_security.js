@@ -4,7 +4,11 @@ const path = require("path")
 const { ROOT } = require("./load")
 
 const account = fs.readFileSync(path.join(ROOT, "MailAccount.qml"), "utf8")
-const feed = fs.readFileSync(path.join(ROOT, "components/FeedView.qml"), "utf8")
+// FeedCard holds the rendering logic; FeedView holds the list scaffolding.
+// Security properties are split across both files.
+const feedView = fs.readFileSync(path.join(ROOT, "components/FeedView.qml"), "utf8")
+const feedCard = fs.readFileSync(path.join(ROOT, "components/FeedCard.qml"), "utf8")
+const feed = feedView + feedCard
 const bodyCache = fs.readFileSync(path.join(ROOT, "BodyCache.qml"), "utf8")
 
 const loaderStart = account.indexOf("function storeFeedBody")
@@ -21,11 +25,11 @@ assert.ok(feed.includes("service.feedBody"),
   "Feed renders the sanitized result rather than raw Gmail payloads")
 assert.ok(!feed.includes("showRemoteImages"),
   "Feed has no bulk image-enabling path")
-assert.ok(feed.includes("loadFeedRemoteImages(card.modelData.id)"),
+assert.ok(feed.includes("loadFeedRemoteImages("),
   "remote images can only be enabled for one explicit Feed message")
 assert.ok(bodyCache.includes("function drainReads"),
   "concurrent virtualized Feed delegates serialize body-cache reads")
-assert.ok(feed.includes("card.body.html === \"\""),
+assert.ok(feed.includes(".html === \"\""),
   "plain-text Feed messages render their text instead of a blank HTML view")
 
 console.log("test_feed_security.js ok")

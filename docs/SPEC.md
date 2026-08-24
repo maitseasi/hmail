@@ -1,4 +1,4 @@
-# Omamail — Spec
+# Hmail — Spec
 
 A native Gmail client for Omarchy, built as a Quickshell plugin on the official
 Gmail REST API. Same technology as Omarchy-Spotify: QML views over plain-JS
@@ -29,7 +29,7 @@ Three plugin entry points (`manifest.kinds`):
 | List triage | **Right-click context menu** on any row: reply / reply all / forward, archive / trash / spam, mark read-unread, star, open in browser. |
 | Reader actions | **Icons with tooltips**, not labelled buttons — six actions fit where six labels would not, with the destructive one set apart by a rule and the urgent colour. Icons are Canvas paths on one 16px grid, because Qt's SVG renderer smears strokes at this size. |
 | Sidebar | **An open but narrow icon rail** (148px; 44px collapsed), named by tooltips either way. Collapsing is one click. |
-| Loading | **Cache first.** Every query, the label list, the profile and opened bodies are kept in one atomically written file under `$XDG_CACHE_HOME/omamail`, keyed by query and bound to the mailbox address. Switching mailboxes paints immediately and revalidates behind it. |
+| Loading | **Cache first.** Every query, the label list, the profile and opened bodies are kept in one atomically written file under `$XDG_CACHE_HOME/hmail`, keyed by query and bound to the mailbox address. Switching mailboxes paints immediately and revalidates behind it. |
 | Setup | **Two steps, one at a time.** Finished steps collapse to a line with a check; the walkthrough hides behind a disclosure. The Publish-app warning stays beside the sign-in button, because it decides whether the session lasts seven days or indefinitely. |
 
 ## Authentication
@@ -40,12 +40,27 @@ guided by an in-app four-step walkthrough.
 
 - Authorization Code + PKCE, loopback redirect `http://127.0.0.1:9481/oauth2callback`
 - Listener is a single-shot `socat`; the browser does the rest
-- Scopes: `gmail.modify` (read, label, archive, trash — cannot permanently
+- Core scopes: `gmail.modify` (read, label, archive, trash — cannot permanently
   delete) and `gmail.send`
+- Optional workflow sync scope: `drive.appdata`, requested incrementally and
+  limited to Hmail's hidden application-data folder
 - Refresh token → GNOME Keyring via `secret-tool`, keyed by client id
-- Client id/secret → `~/.config/omamail/credentials.json`, mode 0600.
+- Client id/secret → `~/.config/hmail/credentials.json`, mode 0600.
   Not plugin settings: `shell.json` is world-readable.
 - Access token → process memory only
+
+## Workflow synchronization
+
+- Opt-in per account; Gmail remains usable when Drive consent or sync fails.
+- Gmail workflow labels are canonical for conversation placement.
+- Drive `appDataFolder` stores only sender/domain rules, seen metadata,
+  schedules, settings, revision stamps and deletion tombstones.
+- The local 0600 workflow store is an offline replica with durable Gmail and
+  Drive retry state.
+- Pull-before-push, per-record deterministic merges and conditional updates
+  prevent one device from blindly replacing another device's decisions.
+- Credentials, tokens, message bodies, subjects and rendered content are never
+  included in the cloud document.
 
 ## Features
 

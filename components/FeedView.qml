@@ -17,6 +17,12 @@ Item {
   signal messageActivated(string id)
   signal messageFocused(string id)
 
+  function expandCurrent() {
+    var item = feed.currentItem
+    if (item && item.summary && item.summary.id === root.cursorId)
+      item.toggleExpand()
+  }
+
   function revealCursor() {
     if (!service) return
     for (var i = 0; i < service.messages.length; i++) {
@@ -42,8 +48,12 @@ Item {
 
   ListView {
     id: feed
-    anchors.fill: parent
-    anchors.margins: Style.space(12)
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    anchors.horizontalCenter: parent.horizontalCenter
+    width: Math.min(parent.width - Style.space(80), Style.space(720))
+    topMargin: Style.space(12)
+    bottomMargin: Style.space(12)
     clip: true
     spacing: Style.space(14)
     boundsBehavior: Flickable.StopAtBounds
@@ -64,130 +74,19 @@ Item {
       }
     }
 
-    delegate: Rectangle {
-      id: card
+    delegate: FeedCard {
       required property var modelData
-
       width: feed.width - Style.space(8)
-      height: content.implicitHeight + Style.space(24)
-      color: root.cursorId === modelData.id
-        ? Style.selectedFillFor(root.textColor, root.accentColor)
-        : "transparent"
-      radius: Style.cornerRadius
-
-      readonly property var body: root.service.feedBody(modelData.id)
-      readonly property string bodyError: root.service.feedBodyError(modelData.id)
-      readonly property bool bodyLoading: root.service.feedBodyIsLoading(modelData.id)
-
-      Component.onCompleted: root.service.loadFeedBody(modelData.id)
-      onBodyChanged: if (!body) root.service.loadFeedBody(modelData.id)
-
-      Column {
-        id: content
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: Style.space(12)
-        spacing: Style.space(8)
-
-        Row {
-          width: parent.width
-          spacing: Style.space(8)
-
-          Text {
-            width: parent.width - when.width - Style.space(8)
-            text: card.modelData.from ? card.modelData.from.display : ""
-            textFormat: Text.PlainText
-            color: root.textColor
-            font.family: root.panelFontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-            elide: Text.ElideRight
-          }
-
-          Text {
-            id: when
-            text: card.modelData.time || ""
-            textFormat: Text.PlainText
-            color: root.dimColor
-            font.family: root.panelFontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
-
-        Text {
-          width: parent.width
-          text: card.modelData.subject || "(no subject)"
-          textFormat: Text.PlainText
-          color: root.textColor
-          font.family: root.panelFontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: true
-          wrapMode: Text.Wrap
-        }
-
-        Text {
-          visible: !card.body
-          width: parent.width
-          text: card.bodyLoading
-            ? "Loading message…"
-            : (card.bodyError ? card.bodyError : (card.modelData.snippet || "Loading message…"))
-          textFormat: Text.PlainText
-          color: root.dimColor
-          font.family: root.panelFontFamily
-          font.pixelSize: Style.font.bodySmall
-          wrapMode: Text.Wrap
-        }
-
-        TextEdit {
-          visible: !!card.body && card.body.html !== ""
-          width: parent.width
-          height: visible ? implicitHeight : 0
-          text: card.body ? card.body.html : ""
-          textFormat: TextEdit.RichText
-          readOnly: true
-          selectByMouse: true
-          wrapMode: TextEdit.Wrap
-          color: root.textColor
-          font.family: root.panelFontFamily
-          font.pixelSize: Style.font.bodySmall
-        }
-
-        Text {
-          visible: !!card.body && card.body.html === ""
-          width: parent.width
-          text: card.body ? card.body.text : ""
-          textFormat: Text.PlainText
-          color: root.textColor
-          font.family: root.panelFontFamily
-          font.pixelSize: Style.font.bodySmall
-          wrapMode: Text.Wrap
-        }
-
-        Button {
-          visible: card.bodyError !== ""
-          text: "Retry loading message"
-          foreground: root.textColor
-          bordered: true
-          fontSize: Style.font.caption
-          onClicked: root.service.retryFeedBody(card.modelData.id)
-        }
-
-        Button {
-          visible: !!card.body && card.body.blockedImages > 0
-          text: "Load images for this message..."
-          foreground: root.dimColor
-          bordered: false
-          fontSize: Style.font.caption
-          onClicked: root.service.loadFeedRemoteImages(card.modelData.id)
-        }
-      }
-
-      HoverHandler {
-        cursorShape: Qt.PointingHandCursor
-        onHoveredChanged: if (hovered) root.messageFocused(card.modelData.id)
-      }
-      TapHandler { onTapped: root.messageActivated(card.modelData.id) }
+      summary: modelData
+      service: root.service
+      textColor: root.textColor
+      backgroundColor: root.backgroundColor
+      accentColor: root.accentColor
+      dimColor: root.dimColor
+      panelFontFamily: root.panelFontFamily
+      focused: root.cursorId === modelData.id
+      onCardFocused: root.messageFocused(modelData.id)
+      // onActivated intentionally not connected — Feed is a reading surface.
     }
 
     Text {

@@ -70,6 +70,7 @@ Item {
   readonly property alias api: apiClient
   readonly property alias cache: cacheStore
   readonly property alias workflow: workflowStore
+  readonly property alias workflowSync: workflowSyncController
 
   // What the cache is keyed on. The page size is part of it: the same query at
   // a different size is a different result set, not a stale one.
@@ -82,8 +83,28 @@ Item {
   property var messages: []
   property bool workflowEnabled: true
   property string workflowKey: "inbox"
+  property var historicalScreenerMessages: []
+  property bool historicalScreenerScanning: false
+  property int historicalScreenerChecked: 0
+  property double historicalScreenerLastScanMs: 0
+  property string historicalScreenerNextPageToken: ""
+  property var historicalScreenerHandle: null
+  property int historicalScreenerSerial: 0
+  readonly property int historicalScreenerMonths:
+    Workflow.normalizeHistoricalScreenerMonths(
+      workflowStore.store.settings.historicalScreenerMonths)
+  readonly property string historicalScreenerCacheKey:
+    "workflow:screener-history:" + historicalScreenerMonths
+  readonly property var historicalScreenerCandidates:
+    Workflow.historicalScreenerCandidates(workflowStore.store,
+      historicalScreenerMessages, accountEmail)
+  readonly property var screenerSourceMessages:
+    Workflow.historicalScreenerCandidates(workflowStore.store,
+      messages.concat(historicalScreenerMessages), accountEmail)
   readonly property var visibleMessages: workflowEnabled && workflowStore.loaded
-    ? Workflow.messagesForView(workflowStore.store, messages, workflowKey)
+    ? (workflowKey === "screener"
+      ? Workflow.messagesForView(workflowStore.store, screenerSourceMessages, workflowKey)
+      : Workflow.messagesForView(workflowStore.store, messages, workflowKey))
     : messages
   readonly property var workflowNewMessages: Workflow.messagesForView(
     workflowStore.store, messages, "new_for_you")
@@ -91,7 +112,8 @@ Item {
     workflowStore.store, messages, "previously_seen")
   readonly property var workflowSenderRules: Workflow.senderRuleList(workflowStore.store)
   readonly property var workflowCounts: ({
-    screener: Workflow.messagesForView(workflowStore.store, messages, "screener").length,
+    screener: Workflow.messagesForView(
+      workflowStore.store, screenerSourceMessages, "screener").length,
     inbox: workflowNewMessages.length,
     feed: Workflow.messagesForView(workflowStore.store, messages, "feed").length,
     paper_trail: Workflow.messagesForView(workflowStore.store, messages, "paper_trail").length,
@@ -144,6 +166,9 @@ Item {
   property int selectedRemoteImages: 0
   property bool selectedTooHeavy: false
   property var selectedAttachments: []
+  property string selectedThreadId: ""
+  property var selectedThreadMessages: []
+  property var threadRemoteImagesAllowed: ({})
   property bool detailLoading: false
   // Set once Gmail's own copy has landed, so a slower cache read knows not to
   // paint over it.
@@ -199,9 +224,18 @@ Item {
   readonly property bool ready: setupState === "ready"
   readonly property bool busy: listLoading || detailLoading || countLoading
     || authManager.sessionBusy || sending || pendingAction !== ""
+  function workflowServerQuery() {
+    if (!workflowSyncController.cloudEnabled || !workflowEnabled) return ""
+    var labelName = Workflow.LABEL_NAMES[String(workflowKey || "")]
+    if (!labelName || workflowKey === "inbox") return ""
+    return "label:\"" + labelName.replace(/"/g, "") + "\""
+  }
+
   readonly property string effectiveQuery: searchQuery.trim() !== ""
     ? searchQuery.trim()
-    : (mailboxKey === "inbox" && defaultQuery !== "" ? defaultQuery : Model.mailbox(mailboxKey).query)
+    : (workflowServerQuery() !== "" ? workflowServerQuery()
+      : (mailboxKey === "inbox" && defaultQuery !== ""
+        ? defaultQuery : Model.mailbox(mailboxKey).query))
   readonly property bool hasMore: nextPageToken !== ""
   readonly property string resultSummary: workflowEnabled
     ? Model.pluralize(visibleMessages.length, "conversation")
@@ -296,6 +330,52 @@ Item {
     })
   }
 
+  function refreshProfileHistory() {
+    if (!ready) return
+    apiClient.getProfile(function(result, error) {
+      if (error || !result) {
+        workflowSyncController.historyRecoveryFailed(
+          error || "Could not refresh Gmail history")
+        return
+      }
+      root.profile = result
+      cacheStore.putProfile(result)
+      root.reconcileWorkflowSnapshot(result.historyId, "")
+    })
+  }
+
+  function reconcileWorkflowSnapshot(newHistoryId, pageToken) {
+    var terms = ["in:inbox"]
+    var names = Workflow.workflowLabelNames()
+    for (var i = 0; i < names.length; i++)
+      terms.push("label:\"" + names[i].replace(/"/g, "") + "\"")
+    apiClient.listMessages("{" + terms.join(" ") + "}", 100, pageToken,
+      function(page, error) {
+        if (error || !page) {
+          workflowSyncController.historyRecoveryFailed(
+            error || "Could not rebuild Gmail workflow state")
+          return
+        }
+        apiClient.getMessages(page.ids, false, function(payloads, fetchError) {
+          if (fetchError) {
+            workflowSyncController.historyRecoveryFailed(fetchError)
+            return
+          }
+          var now = new Date()
+          var summaries = []
+          for (var j = 0; j < payloads.length; j++)
+            summaries.push(Mail.summarize(payloads[j], now))
+          workflowSyncController.reconcileMessages(summaries)
+          if (page.nextPageToken) {
+            root.reconcileWorkflowSnapshot(newHistoryId, page.nextPageToken)
+            return
+          }
+          workflowSyncController.establishHistory(newHistoryId)
+          root.loadMessages(false)
+        })
+      })
+  }
+
   function loadLabels() {
     if (!ready) return
     if (cacheStore.loaded && cacheStore.store.labels.length > 0 && labels.length === 0)
@@ -325,10 +405,12 @@ Item {
       }
     }
     if (!missing) {
+      workflowSyncController.labelIdsByName = byName
       var queued = workflowMirrorQueue
       workflowMirrorQueue = []
       for (var queuedIndex = 0; queuedIndex < queued.length; queuedIndex++)
         mirrorWorkflowThread(queued[queuedIndex])
+      workflowSyncController.processGmailOutbox()
       return
     }
     workflowLabelsLoading = true
@@ -365,6 +447,14 @@ Item {
     var change = Workflow.workflowLabelChanges(summary.labelIds,
       workflowLabelIds, destination, state)
     if (change.add.length === 0 && change.remove.length === 0) return
+    if (workflowSyncController.cloudEnabled) {
+      var labelName = Workflow.labelNameFor(destination, state)
+      if (labelName) {
+        workflowStore.queueGmailOperation(threadId, labelName)
+        workflowSyncController.processGmailOutbox()
+      }
+      return
+    }
     apiClient.modifyThread(threadId, change.add, change.remove, function(payload, error) {
       workflowStore.setThreadState(threadId, { syncPending: !!error })
       if (error) root.fail(error)
@@ -376,9 +466,126 @@ Item {
     if (enabled) ensureWorkflowLabels()
   }
 
+  function enableCloudSync() {
+    workflowSyncController.enable()
+  }
+
+  function disableCloudSync() {
+    workflowSyncController.disable()
+  }
+
+  function syncWorkflowNow() {
+    workflowSyncController.syncNow()
+  }
+
   function initializeExistingWorkflow() {
     if (workflowStore.initializeExistingInbox(messages))
       note("Loaded Inbox moved to Previously Seen")
+  }
+
+  function restoreHistoricalScreener() {
+    historicalScreenerMessages = []
+    historicalScreenerChecked = 0
+    historicalScreenerLastScanMs = 0
+    historicalScreenerNextPageToken = ""
+    if (!cacheStore.loaded || historicalScreenerMonths === 0) return
+    var cached = cacheStore.get(historicalScreenerCacheKey)
+    if (!cached) return
+    historicalScreenerMessages = Cache.hydrate(cached.summaries)
+    historicalScreenerChecked = Math.max(0, Number(cached.estimate) || 0)
+    historicalScreenerLastScanMs = Math.max(0, Number(cached.at) || 0)
+    historicalScreenerNextPageToken = String(cached.nextPageToken || "")
+  }
+
+  function setHistoricalScreenerMonths(value) {
+    var months = Workflow.normalizeHistoricalScreenerMonths(value)
+    if (!workflowStore.setSetting("historicalScreenerMonths", months)
+        && historicalScreenerMonths === months) return
+    cancelHistoricalScreenerScan()
+    Qt.callLater(restoreHistoricalScreener)
+  }
+
+  function saveHistoricalScreenerProgress(nextToken) {
+    historicalScreenerNextPageToken = String(nextToken || "")
+    historicalScreenerLastScanMs = Date.now()
+    cacheStore.putQuery(historicalScreenerCacheKey, {
+      summaries: historicalScreenerMessages,
+      estimate: historicalScreenerChecked,
+      nextPageToken: historicalScreenerNextPageToken
+    })
+  }
+
+  function startHistoricalScreenerScan() {
+    if (!ready || historicalScreenerScanning || historicalScreenerMonths === 0) return
+    var resumeToken = historicalScreenerNextPageToken
+    historicalScreenerSerial++
+    historicalScreenerScanning = true
+    if (resumeToken === "") {
+      historicalScreenerMessages = []
+      historicalScreenerChecked = 0
+    }
+    scanHistoricalScreenerPage(resumeToken, historicalScreenerSerial)
+  }
+
+  function cancelHistoricalScreenerScan() {
+    if (!historicalScreenerScanning) return
+    historicalScreenerSerial++
+    apiClient.abortRequest(historicalScreenerHandle)
+    historicalScreenerHandle = null
+    historicalScreenerScanning = false
+    saveHistoricalScreenerProgress(historicalScreenerNextPageToken)
+    note("Historical Screener scan paused")
+  }
+
+  function scanHistoricalScreenerPage(pageToken, serial) {
+    if (serial !== historicalScreenerSerial || !historicalScreenerScanning) return
+    var query = "in:inbox newer_than:" + historicalScreenerMonths + "m"
+    historicalScreenerHandle = apiClient.listMessages(query, 100, pageToken,
+      function(page, error) {
+        if (serial !== root.historicalScreenerSerial || !root.historicalScreenerScanning) return
+        if (error || !page) {
+          root.historicalScreenerScanning = false
+          root.historicalScreenerHandle = null
+          root.fail(error || "Could not scan historical Inbox mail")
+          return
+        }
+        root.scanHistoricalScreenerChunks(page.ids, 0, [], page, serial)
+      })
+  }
+
+  function scanHistoricalScreenerChunks(ids, offset, payloads, page, serial) {
+    if (serial !== historicalScreenerSerial || !historicalScreenerScanning) return
+    var list = Array.isArray(ids) ? ids : []
+    if (offset >= list.length) {
+      var summaries = []
+      for (var i = 0; i < payloads.length; i++)
+        summaries.push(Mail.summarize(payloads[i], new Date()))
+      historicalScreenerMessages = Workflow.historicalScreenerCandidates(
+        workflowStore.store, historicalScreenerMessages.concat(summaries), accountEmail)
+      historicalScreenerChecked += list.length
+      saveHistoricalScreenerProgress(page.nextPageToken)
+      if (page.nextPageToken) {
+        scanHistoricalScreenerPage(page.nextPageToken, serial)
+      } else {
+        historicalScreenerScanning = false
+        historicalScreenerHandle = null
+        note("Historical Screener scan complete")
+      }
+      return
+    }
+    var chunk = list.slice(offset, offset + 20)
+    historicalScreenerHandle = apiClient.getMessages(chunk, false,
+      function(found, error) {
+        if (serial !== root.historicalScreenerSerial || !root.historicalScreenerScanning) return
+        if (error && (!found || found.length === 0)) {
+          root.historicalScreenerScanning = false
+          root.historicalScreenerHandle = null
+          root.fail(error)
+          return
+        }
+        root.scanHistoricalScreenerChunks(list, offset + chunk.length,
+          payloads.concat(found || []), page, serial)
+      })
   }
 
   function initializeWorkflowIfNeeded() {
@@ -509,9 +716,14 @@ Item {
     lastSyncedMs = Date.now()
     listRefreshed()
 
-    if (workflowStore.store.settings.mirrorGmailLabels) {
+    if (workflowStore.store.settings.mirrorGmailLabels
+        && !workflowSyncController.cloudEnabled) {
       for (var mirrorIndex = 0; mirrorIndex < summaries.length; mirrorIndex++)
         mirrorWorkflowThread(summaries[mirrorIndex])
+    }
+    if (workflowSyncController.cloudEnabled) {
+      workflowSyncController.establishHistory(profile ? profile.historyId : "")
+      workflowSyncController.reconcileMessages(summaries)
     }
 
     if (notifyNewMail && arrivals.length > 0) notify(arrivals)
@@ -524,6 +736,70 @@ Item {
 
   // --------------------------------------------------------------- detail
 
+  function messageById(id) {
+    var index = Model.indexById(messages, id)
+    if (index >= 0) return messages[index]
+    index = Model.indexById(historicalScreenerMessages, id)
+    return index >= 0 ? historicalScreenerMessages[index] : null
+  }
+
+  function prepareThreadEntry(summary, source, allowRemoteImages) {
+    var body = source || ({})
+    var rawHtml = String(body.html || "")
+    var safe = Html.sanitize(rawHtml, ({
+      allowRemoteImages: allowRemoteImages === true,
+      withPlainText: body.source === "html"
+    }))
+    return {
+      id: String(summary && summary.id || ""),
+      summary: summary,
+      html: safe.html,
+      text: body.source === "html" && safe.plainText
+        ? safe.plainText.text : String(body.text || ""),
+      source: String(body.source || ""),
+      sourceHtml: rawHtml,
+      document: safe.document,
+      blockedImages: safe.blockedImages,
+      remoteImages: safe.remoteImages,
+      tooHeavy: safe.tooHeavy,
+      attachments: Array.isArray(body.attachments) ? body.attachments : [],
+      images: safe.plainText ? safe.plainText.images
+        : (Array.isArray(body.images) ? body.images : [])
+    }
+  }
+
+  function threadEntryFromPayload(payload) {
+    var summary = Mail.summarize(payload, new Date())
+    var decoded = Mail.extractBody(payload.payload)
+    var rawHtml = Mail.extractHtml(payload.payload)
+    var cachedBody = {
+      text: decoded.text,
+      source: decoded.source,
+      html: rawHtml,
+      attachments: Mail.attachments(payload.payload),
+      images: []
+    }
+    var allowed = threadRemoteImagesAllowed["message:" + summary.id] === true
+    return {
+      entry: prepareThreadEntry(summary, cachedBody, allowed),
+      cache: cachedBody
+    }
+  }
+
+  function applySelectedThreadEntry(entry) {
+    if (!entry || !entry.summary) return
+    selectedMessage = entry.summary
+    selectedBody = { text: entry.text, source: entry.source }
+    selectedHtml = entry.html
+    selectedDocument = entry.document
+    sourceHtml = entry.sourceHtml
+    selectedBlockedImages = entry.blockedImages
+    selectedRemoteImages = entry.remoteImages
+    selectedTooHeavy = entry.tooHeavy
+    selectedImages = entry.images
+    selectedAttachments = entry.attachments
+  }
+
   function select(id) {
     var messageId = String(id || "")
     if (messageId === "") {
@@ -531,10 +807,9 @@ Item {
       return
     }
     selectedId = messageId
-    var summaryIndex = Model.indexById(messages, messageId)
-    if (workflowEnabled && summaryIndex >= 0) {
-      var summary = messages[summaryIndex]
-      workflowStore.markSeen(Workflow.threadIdFor(summary), messageId)
+    var cachedSummary = messageById(messageId)
+    if (workflowEnabled && cachedSummary) {
+      workflowStore.markSeen(Workflow.threadIdFor(cachedSummary), messageId)
     }
     var serial = ++detailSerial
     apiClient.abortRequest(detailHandle)
@@ -548,6 +823,9 @@ Item {
     selectedRemoteImages = 0
     selectedImages = []
     selectedAttachments = []
+    selectedThreadId = cachedSummary ? String(cachedSummary.threadId || "") : ""
+    selectedThreadMessages = []
+    threadRemoteImagesAllowed = ({})
     detailLoading = true
 
     // A message that has been opened before opens from its file, usually well
@@ -558,52 +836,42 @@ Item {
     bodyCache.read(messageId, function(cached) {
       if (serial !== root.detailSerial) return
       if (root.detailLive || !cached) return
-      root.selectedBody = { text: cached.text, source: cached.source }
-      root.renderSource(cached.html)
-      root.selectedAttachments = cached.attachments
-      root.selectedImages = cached.images
+      // The list summary and cached body are enough to paint a complete
+      // reader. Gmail still refreshes both in the background, but a slow live
+      // request must not leave an already-cached message behind the skeleton.
+      var entry = root.prepareThreadEntry(cachedSummary, cached, false)
+      root.selectedThreadMessages = [entry]
+      root.applySelectedThreadEntry(entry)
+      root.detailLoading = false
       bodyCache.touch(messageId)
     })
 
-    detailHandle = apiClient.getMessage(messageId, true, function(payload, error) {
+    detailHandle = apiClient.getThread(selectedThreadId || messageId, function(thread, error) {
       if (serial !== root.detailSerial) return
       root.detailLoading = false
       root.detailLive = true
-      if (error || !payload) {
-        root.fail(error || "Could not open that message")
+      if (error || !thread) {
+        root.fail(error || "Could not open that conversation")
         return
       }
-      var summary = Mail.summarize(payload, new Date())
-      root.selectedMessage = summary
-      var decoded = Mail.extractBody(payload.payload)
-      var rawHtml = Mail.extractHtml(payload.payload)
-      // Both readings of the body out of one parse. The markers in the
-      // plain-text one and the pictures they stand for are numbered by the same
-      // walk over the same tree, so a marker cannot open somebody else's image
-      // — and it is only asked for when the text came from the HTML, because a
-      // message that shipped its own text/plain part never had images in it.
-      // A body never changes once fetched, which is what makes the cache
-      // correct — so when the cache already painted this exact markup there is
-      // nothing here to paint again, and rendering it would be a second parse
-      // of the whole message to arrive at the document already on screen.
-      if (rawHtml !== root.sourceHtml || root.selectedDocument === null) {
-        var ready = root.renderSource(rawHtml, decoded.source === "html")
-        if (ready.plainText) decoded = ({ text: ready.plainText.text, source: "html" })
-        root.selectedBody = decoded
-        root.selectedImages = ready.plainText ? ready.plainText.images : []
+      root.selectedThreadId = thread.id || root.selectedThreadId
+      var entries = []
+      var selectedEntry = null
+      var rawMessages = Array.isArray(thread.messages) ? thread.messages : []
+      for (var i = 0; i < rawMessages.length; i++) {
+        var prepared = root.threadEntryFromPayload(rawMessages[i])
+        entries.push(prepared.entry)
+        bodyCache.put(prepared.entry.id, prepared.cache)
+        if (prepared.entry.id === messageId) selectedEntry = prepared.entry
       }
-      root.selectedAttachments = Mail.attachments(payload.payload)
-      bodyCache.put(messageId, ({
-        text: decoded.text,
-        source: decoded.source,
-        html: rawHtml,
-        attachments: root.selectedAttachments,
-        images: root.selectedImages
-      }))
-      root.messages = Model.replaceById(root.messages, summary)
+      root.selectedThreadMessages = entries
+      if (!selectedEntry && entries.length > 0) selectedEntry = entries[entries.length - 1]
+      root.applySelectedThreadEntry(selectedEntry)
+      if (selectedEntry)
+        root.messages = Model.replaceById(root.messages, selectedEntry.summary)
       // Opening a message is the one place Gmail's own clients mark it read
       // without being asked, and a reader that leaves it bold is confusing.
-      if (summary.unread) root.act(messageId, "markRead", true)
+      if (selectedEntry && selectedEntry.summary.unread) root.act(messageId, "markRead", true)
     })
   }
 
@@ -627,9 +895,35 @@ Item {
   }
 
   function showRemoteImages() {
-    if (remoteImagesAllowed || sourceHtml === "") return
-    remoteImagesAllowed = true
-    renderSource(sourceHtml)
+    loadThreadRemoteImages(selectedId)
+  }
+
+  function loadThreadRemoteImages(id) {
+    var messageId = String(id || "")
+    if (!messageId) return
+    var nextAllowed = {}
+    for (var key in threadRemoteImagesAllowed)
+      nextAllowed[key] = threadRemoteImagesAllowed[key]
+    nextAllowed["message:" + messageId] = true
+    threadRemoteImagesAllowed = nextAllowed
+    var entries = selectedThreadMessages.slice()
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].id !== messageId) continue
+      var entry = entries[i]
+      entries[i] = prepareThreadEntry(entry.summary, {
+        text: entry.text,
+        source: entry.source,
+        html: entry.sourceHtml,
+        attachments: entry.attachments,
+        images: entry.images
+      }, true)
+      if (selectedId === messageId) {
+        remoteImagesAllowed = true
+        applySelectedThreadEntry(entries[i])
+      }
+      selectedThreadMessages = entries
+      return
+    }
   }
 
   function feedBody(id) {
@@ -761,6 +1055,9 @@ Item {
     selectedRemoteImages = 0
     selectedTooHeavy = false
     selectedAttachments = []
+    selectedThreadId = ""
+    selectedThreadMessages = []
+    threadRemoteImagesAllowed = ({})
     detailLoading = false
   }
 
@@ -926,6 +1223,9 @@ Item {
       }
       root.note("Sent")
       root.replySent()
+      if (values.threadId && values.threadId === root.selectedThreadId
+          && root.selectedId !== "")
+        Qt.callLater(function() { root.select(root.selectedId) })
     })
   }
 
@@ -940,14 +1240,14 @@ Item {
     // mail, and a display name of "-u" would otherwise be read by notify-send
     // as an option rather than as a name.
     if (list.length === 1) {
-      Quickshell.execDetached(["notify-send", "-a", "Omamail", "-i", "mail-unread",
+      Quickshell.execDetached(["notify-send", "-a", "Hmail", "-i", "mail-unread",
         "--", Model.notificationTitle(list[0]), Model.notificationBody(list[0])])
       return
     }
     // One notification per message turns a batch sync into a wall of popups.
     var names = []
     for (var i = 0; i < list.length && i < 3; i++) names.push(Model.notificationTitle(list[i]))
-    Quickshell.execDetached(["notify-send", "-a", "Omamail", "-i", "mail-unread",
+    Quickshell.execDetached(["notify-send", "-a", "Hmail", "-i", "mail-unread",
       "--", Model.pluralize(list.length, "new message"), names.join(", ")])
   }
 
@@ -979,6 +1279,7 @@ Item {
     var wanted = String(key || "inbox")
     var targetMailbox = wanted === "everything" ? "all" : "inbox"
     var needsInbox = mailboxKey !== targetMailbox || searchQuery !== ""
+      || (workflowSyncController.cloudEnabled && workflowKey !== wanted)
     workflowEnabled = true
     workflowKey = wanted
     mailboxKey = targetMailbox
@@ -992,15 +1293,19 @@ Item {
   }
 
   function routeSender(id, destination) {
-    var index = Model.indexById(messages, id)
-    if (index < 0 || !workflowStore.writable) return
-    var summary = messages[index]
+    var summary = messageById(id)
+    if (!summary || !workflowStore.writable) return
     var wanted = String(destination || "")
     var rule = wanted === "screened_out"
       ? ({ decision: "screened_out", destination: null })
       : ({ decision: "accepted", destination: wanted })
-    if (workflowStore.setSenderRule(summary.from, rule))
+    if (workflowStore.setSenderRule(summary.from, rule)) {
+      workflowStore.setThreadState(Workflow.threadIdFor(summary), {
+        pile: null,
+        placementLabel: wanted
+      })
       note(wanted === "screened_out" ? "Sender screened out" : "Sender moved to " + wanted.replace("_", " "))
+    }
     mirrorWorkflowThread(summary)
   }
 
@@ -1009,12 +1314,69 @@ Item {
     var rule = wanted === "screened_out"
       ? ({ decision: "screened_out", destination: null })
       : ({ decision: "accepted", destination: wanted })
-    if (workflowStore.setSenderRule(sender, rule))
+    if (workflowStore.setSenderRule(sender, rule)) {
       note(wanted === "screened_out" ? "Sender screened out" : "Sender route updated")
+      for (var i = 0; i < messages.length; i++) {
+        if (Workflow.normalizeSender(messages[i].from) === Workflow.normalizeSender(sender))
+          mirrorWorkflowThread(messages[i])
+      }
+    }
   }
 
   function forgetSender(sender) {
-    if (workflowStore.removeSenderRule(sender)) note("Sender returned to Screener")
+    if (!workflowStore.removeSenderRule(sender)) return
+    note("Sender returned to Screener")
+    var normalized = Workflow.normalizeSender(sender)
+    for (var i = 0; i < messages.length; i++) {
+      if (Workflow.normalizeSender(messages[i].from) !== normalized) continue
+      workflowStore.setThreadState(Workflow.threadIdFor(messages[i]), {
+        destinationOverride: null,
+        pile: null,
+        placementLabel: "screener"
+      })
+      mirrorWorkflowThread(messages[i])
+    }
+    if (workflowSyncController.cloudEnabled)
+      relabelForgottenSender(normalized, "")
+  }
+
+  // Relabel jobs that hit a transient failure, keyed so a retry resumes from
+  // the page it failed on rather than starting over.
+  property var pendingRelabelJobs: []
+
+  function relabelForgottenSender(sender, pageToken, attempt) {
+    if (!Workflow.normalizeSender(sender)) return
+    var tries = Math.max(0, Math.floor(Number(attempt) || 0))
+    apiClient.listMessages("from:(" + sender + ")", 100, pageToken,
+      function(page, error) {
+        if (error || !page) {
+          if (tries < 5) {
+            var jobs = root.pendingRelabelJobs.slice()
+            jobs.push({ sender: sender, pageToken: String(pageToken || ""), attempt: tries + 1 })
+            root.pendingRelabelJobs = jobs
+            relabelRetryTimer.restart()
+          } else {
+            root.fail(error || "Could not return all sender conversations to Screener")
+          }
+          return
+        }
+        for (var i = 0; i < page.threadIds.length; i++)
+          workflowStore.queueGmailOperation(page.threadIds[i], Workflow.LABEL_NAMES.screener)
+        workflowSyncController.processGmailOutbox()
+        if (page.nextPageToken)
+          root.relabelForgottenSender(sender, page.nextPageToken, 0)
+      })
+  }
+
+  Timer {
+    id: relabelRetryTimer
+    interval: 30000
+    onTriggered: {
+      var jobs = root.pendingRelabelJobs
+      root.pendingRelabelJobs = []
+      for (var i = 0; i < jobs.length; i++)
+        root.relabelForgottenSender(jobs[i].sender, jobs[i].pageToken, jobs[i].attempt)
+    }
   }
 
   function moveThread(id, destination) {
@@ -1023,7 +1385,9 @@ Item {
     if (index < 0 || !Workflow.validDestination(wanted)) return
     var summary = messages[index]
     if (workflowStore.setThreadState(Workflow.threadIdFor(summary), {
-      destinationOverride: wanted
+      destinationOverride: wanted,
+      pile: null,
+      placementLabel: wanted
     })) {
       note("Conversation moved to " + wanted.replace("_", " "))
       mirrorWorkflowThread(summary)
@@ -1036,7 +1400,10 @@ Item {
     var summary = messages[index]
     if (workflowStore.setThreadState(Workflow.threadIdFor(summary), {
       destinationOverride: null
-    })) note("Using sender default")
+    })) {
+      note("Using sender default")
+      mirrorWorkflowThread(summary)
+    }
   }
 
   function setWorkflowPile(id, pile) {
@@ -1105,6 +1472,11 @@ Item {
   function openGmailApiPage() {
     Quickshell.execDetached(["xdg-open",
       "https://console.cloud.google.com/apis/library/gmail.googleapis.com"])
+  }
+
+  function openDriveApiPage() {
+    Quickshell.execDetached(["xdg-open",
+      "https://console.cloud.google.com/apis/library/drive.googleapis.com"])
   }
 
   function signIn() { authManager.beginLogin() }
@@ -1186,6 +1558,28 @@ Item {
     auth: authManager
   }
 
+  DriveApiClient {
+    id: driveApiClient
+    auth: authManager
+  }
+
+  WorkflowSync {
+    id: workflowSyncController
+    auth: authManager
+    driveApi: driveApiClient
+    gmailApi: apiClient
+    workflowStore: workflowStore
+    labelIdsByName: root.workflowLabelIds
+    onLabelsRequired: root.ensureWorkflowLabels()
+    onRefreshRequested: root.loadMessages(false)
+    onProfileRefreshRequested: root.refreshProfileHistory()
+    onActivated: {
+      root.ensureWorkflowLabels()
+      workflowSyncController.establishHistory(root.profile ? root.profile.historyId : "")
+      workflowSyncController.reconcileMessages(root.messages)
+    }
+  }
+
   CacheStore {
     id: cacheStore
     accountId: root.accountId
@@ -1195,6 +1589,7 @@ Item {
       if (!root.profile && store.profile) root.profile = store.profile
       if (root.labels.length === 0 && store.labels.length > 0) root.labels = store.labels
       if (root.messages.length === 0) root.paintFromCache()
+      root.restoreHistoricalScreener()
     }
   }
 
@@ -1205,6 +1600,7 @@ Item {
       if (lastError !== "") root.fail(lastError)
       root.initializeWorkflowIfNeeded()
       root.processWorkflowBubbles()
+      root.restoreHistoricalScreener()
     }
   }
 

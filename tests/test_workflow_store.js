@@ -19,5 +19,11 @@ assert.ok(source.includes("chmod 600"),
   "the workflow file is private")
 assert.ok(source.includes("root.writable = result.ok"),
   "invalid workflow data disables writes instead of being overwritten")
+assert.ok(source.includes("Workflow.mergeCloud"),
+  "cloud data is merged through the tested workflow engine")
+assert.ok(source.includes("queueGmailOperation"),
+  "Gmail placement retries are persisted in the durable workflow store")
+assert.ok(source.includes("device_"),
+  "each local replica receives a stable device identity")
 
 console.log("test_workflow_store.js ok")

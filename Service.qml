@@ -31,7 +31,7 @@ Item {
   property var barWidgetRegistry: null
 
   readonly property string pluginId: manifest && manifest.id
-    ? String(manifest.id) : "omamail"
+    ? String(manifest.id) : "hmail"
   readonly property string pluginDir: manifest && manifest.__sourceDir
     ? String(manifest.__sourceDir) : ""
 
@@ -236,7 +236,7 @@ Item {
   // pushed in from the bar widget and are not the window's to write. Only what
   // the window cannot recompute lives here.
 
-  property bool sidebarCollapsed: false
+  property bool sidebarCollapsed: true
   property bool windowPrefsLoaded: false
   property string windowWritePayload: ""
 
@@ -244,7 +244,8 @@ Item {
     var parsed = null
     try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
     if (parsed && typeof parsed === "object")
-      sidebarCollapsed = parsed.sidebarCollapsed === true
+      // Default is now collapsed; only restore expanded if explicitly saved.
+      sidebarCollapsed = parsed.sidebarCollapsed !== false
     windowPrefsLoaded = true
   }
 
@@ -288,13 +289,13 @@ Item {
   // The bar answers for all of them: a badge that counted only the mailbox you
   // happen to be looking at would be worse than none.
   readonly property string barTooltip: {
-    if (!ready) return "Omamail · Not connected"
+    if (!ready) return "Hmail · Not connected"
     var suffix = unreadTotal === 0 ? "No unread mail"
       : (unreadTotal === 1 ? "1 unread message" : unreadTotal + " unread messages")
     // The address, whatever the number of mailboxes. How many are configured is
     // not something a tooltip on a mail icon is asked, and the count it used to
     // give was of mailboxes rather than of anything waiting in them.
-    return (accountEmail !== "" ? accountEmail : "Omamail") + " · " + suffix
+    return (accountEmail !== "" ? accountEmail : "Hmail") + " · " + suffix
   }
 
   // The switcher's model: every mailbox, its count, and why it is not usable.
@@ -334,11 +335,34 @@ Item {
   readonly property bool workflowEnabled: !!current && current.workflowEnabled
   readonly property string workflowKey: current ? current.workflowKey : "inbox"
   readonly property var workflowCounts: current ? current.workflowCounts : ({})
+  readonly property var workflowNewMessages: current ? current.workflowNewMessages : []
   readonly property int workflowNewCount: current ? current.workflowNewMessages.length : 0
   readonly property bool workflowWritable: !!current && current.workflow.writable
   readonly property bool workflowMirroring: !!current
     && current.workflow.store.settings.mirrorGmailLabels
+  readonly property bool workflowCloudEnabled: !!current
+    && current.workflowSync.cloudEnabled
+  readonly property bool workflowCloudBusy: !!current
+    && current.workflowSync.busy
+  readonly property string workflowCloudStatus: current
+    ? current.workflowSync.status : ""
+  readonly property string workflowCloudError: current
+    ? current.workflowSync.lastError : ""
+  readonly property string workflowCloudLastSync: current
+    ? current.workflowSync.lastSyncAt : ""
   readonly property var workflowSenderRules: current ? current.workflowSenderRules : []
+  readonly property int historicalScreenerMonths:
+    current ? current.historicalScreenerMonths : 0
+  readonly property bool historicalScreenerScanning:
+    !!current && current.historicalScreenerScanning
+  readonly property int historicalScreenerChecked:
+    current ? current.historicalScreenerChecked : 0
+  readonly property int historicalScreenerFound:
+    current ? current.historicalScreenerCandidates.length : 0
+  readonly property double historicalScreenerLastScanMs:
+    current ? current.historicalScreenerLastScanMs : 0
+  readonly property bool historicalScreenerCanResume:
+    !!current && current.historicalScreenerNextPageToken !== ""
   readonly property bool listLoading: !!current && current.listLoading
   readonly property bool listLoaded: !!current && current.listLoaded
   readonly property bool hasMore: !!current && current.hasMore
@@ -353,6 +377,9 @@ Item {
   readonly property int selectedRemoteImages: current ? current.selectedRemoteImages : 0
   readonly property bool remoteImagesAllowed: !!current && current.remoteImagesAllowed
   readonly property var selectedAttachments: current ? current.selectedAttachments : []
+  readonly property string selectedThreadId: current ? current.selectedThreadId : ""
+  readonly property var selectedThreadMessages:
+    current ? current.selectedThreadMessages : []
   readonly property bool selectedTooHeavy: !!current && current.selectedTooHeavy
   readonly property bool detailLoading: !!current && current.detailLoading
   readonly property bool sending: !!current && current.sending
@@ -366,6 +393,9 @@ Item {
   function select(id) { if (current) current.select(id) }
   function clearSelection() { if (current) current.clearSelection() }
   function showRemoteImages() { if (current) current.showRemoteImages() }
+  function loadThreadRemoteImages(id) {
+    if (current) current.loadThreadRemoteImages(id)
+  }
   function feedBody(id) { return current ? current.feedBody(id) : null }
   function feedBodyError(id) { return current ? current.feedBodyError(id) : "" }
   function feedBodyIsLoading(id) { return !!current && current.feedBodyIsLoading(id) }
@@ -390,7 +420,19 @@ Item {
   function scheduleWorkflowBubble(id, at) { if (current) current.scheduleWorkflowBubble(id, at) }
   function cancelWorkflowBubble(id) { if (current) current.cancelWorkflowBubble(id) }
   function setWorkflowMirroring(enabled) { if (current) current.setWorkflowMirroring(enabled) }
+  function enableCloudSync() { if (current) current.enableCloudSync() }
+  function disableCloudSync() { if (current) current.disableCloudSync() }
+  function syncWorkflowNow() { if (current) current.syncWorkflowNow() }
   function initializeExistingWorkflow() { if (current) current.initializeExistingWorkflow() }
+  function setHistoricalScreenerMonths(months) {
+    if (current) current.setHistoricalScreenerMonths(months)
+  }
+  function startHistoricalScreenerScan() {
+    if (current) current.startHistoricalScreenerScan()
+  }
+  function cancelHistoricalScreenerScan() {
+    if (current) current.cancelHistoricalScreenerScan()
+  }
   function act(id, action, quiet) { if (current) current.act(id, action, quiet) }
   function toggleStar(id) { if (current) current.toggleStar(id) }
   function markAllRead() { if (current) current.markAllRead() }
@@ -402,11 +444,12 @@ Item {
   function openWebInbox() { if (current) current.openWebInbox() }
   function openCloudConsole() { if (current) current.openCloudConsole() }
   function openGmailApiPage() { if (current) current.openGmailApiPage() }
+  function openDriveApiPage() { if (current) current.openDriveApiPage() }
 
   // Not forwarded to an account: the project exists whether or not anyone has
   // signed in, and the menu offers it on the setup page too.
   function openProjectPage() {
-    Quickshell.execDetached(["xdg-open", "https://github.com/huacnlee/omamail"])
+    Quickshell.execDetached(["xdg-open", "https://github.com/maitseasi/hmail"])
   }
 
   function openAuthorPage() {
@@ -457,7 +500,7 @@ Item {
     id: windowFile
     path: {
       var home = Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")
-      return home + "/omamail/window.json"
+      return home + "/hmail/window.json"
     }
     printErrors: false
     onLoaded: root.applyWindowPrefs(text())
@@ -481,7 +524,7 @@ Item {
     id: accountsFile
     path: {
       var home = Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")
-      return home + "/omamail/accounts.json"
+      return home + "/hmail/accounts.json"
     }
     watchChanges: true
     printErrors: false

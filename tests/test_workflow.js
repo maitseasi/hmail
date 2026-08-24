@@ -23,13 +23,32 @@ assert.strictEqual(workflow.normalizeSender("two@example.com, other@example.com"
 deepEqual(workflow.emptyStore("Ada@Example.COM"), {
   version: workflow.VERSION,
   account: "ada@example.com",
+  deviceId: "",
+  syncCounter: 0,
+  settingRevisions: {},
   senders: {},
   threads: {},
   domainRules: {},
+  tombstones: {
+    senders: {},
+    threads: {},
+    domainRules: {}
+  },
+  cloud: {
+    enabled: false,
+    fileId: "",
+    etag: "",
+    lastSyncAt: "",
+    lastError: "",
+    historyId: "",
+    drivePending: false,
+    gmailOutbox: []
+  },
   settings: {
     initialized: false,
     mirrorGmailLabels: false,
-    routeRepliesToInbox: true
+    routeRepliesToInbox: true,
+    historicalScreenerMonths: 0
   }
 })
 assert.strictEqual(workflow.workflowLabelNames().length, 8)
@@ -57,6 +76,24 @@ const mirrored = workflow.setSetting(workflow.emptyStore("ada@example.com"),
   "mirrorGmailLabels", true)
 assert.strictEqual(mirrored.settings.mirrorGmailLabels, true)
 assert.strictEqual(workflow.emptyStore("ada@example.com").settings.mirrorGmailLabels, false)
+assert.strictEqual(workflow.normalizeHistoricalScreenerMonths(1), 1)
+assert.strictEqual(workflow.normalizeHistoricalScreenerMonths("3"), 3)
+assert.strictEqual(workflow.normalizeHistoricalScreenerMonths(4), 0)
+const historical = workflow.setSetting(workflow.emptyStore("ada@example.com"),
+  "historicalScreenerMonths", 2)
+assert.strictEqual(historical.settings.historicalScreenerMonths, 2)
+
+const historicalRows = [
+  message("old-news", "thread-old", "news@example.com", NOW - 3000),
+  message("new-news", "thread-new", "news@example.com", NOW - 1000),
+  message("person", "thread-person", "person@example.com", NOW - 2000),
+  message("mine", "thread-mine", "ada@example.com", NOW)
+]
+let historicalRules = workflow.setSenderRule(workflow.emptyStore("ada@example.com"),
+  "person@example.com", { decision: "accepted", destination: "inbox" }, NOW)
+deepEqual(workflow.historicalScreenerCandidates(
+  historicalRules, historicalRows, "ada@example.com").map(function(row) { return row.id }),
+["new-news"])
 
 // -------------------------------------------------------------- sender rules
 
@@ -271,5 +308,87 @@ assert.strictEqual(roundTrip.ok, true)
 assert.strictEqual(roundTrip.store.account, "ada@example.com")
 assert.strictEqual(roundTrip.store.futureTopLevel.enabled, true)
 assert.strictEqual(roundTrip.store.settings.futureSetting, "preserve me")
+
+// --------------------------------------------------------------- cloud sync
+
+let cloudLocal = workflow.setDeviceId(
+  workflow.emptyStore("ada@example.com"), "device_local_12345")
+cloudLocal = workflow.setSenderRule(cloudLocal, "sync@example.com", {
+  decision: "accepted", destination: "feed"
+}, NOW)
+const cloudRemote = workflow.cloudDocument(cloudLocal)
+cloudRemote.senders["sync@example.com"].destination = "paper_trail"
+cloudRemote.senders["sync@example.com"].updatedAt = "2026-08-20T11:00:00.000Z"
+cloudRemote.senders["sync@example.com"]._rev = {
+  counter: 1, deviceId: "device_remote_123", updatedAt: "2026-08-20T11:00:00.000Z"
+}
+const cloudMerged = workflow.mergeCloud(cloudLocal, cloudRemote)
+assert.strictEqual(cloudMerged.ok, true)
+assert.strictEqual(workflow.getSenderRule(
+  cloudMerged.store, "sync@example.com").destination, "paper_trail")
+
+const legacyCloudSettings = workflow.cloudDocument(
+  workflow.emptyStore("ada@example.com"))
+legacyCloudSettings.settings.historicalScreenerMonths = 3
+legacyCloudSettings.settingRevisions = {}
+assert.strictEqual(workflow.mergeCloud(
+  workflow.emptyStore("ada@example.com"), legacyCloudSettings)
+  .store.settings.historicalScreenerMonths, 3,
+  "revisionless cloud settings restore onto fresh defaults")
+const editedSettings = workflow.setSetting(
+  workflow.emptyStore("ada@example.com"), "historicalScreenerMonths", 1)
+assert.strictEqual(workflow.mergeCloud(
+  editedSettings, legacyCloudSettings).store.settings.historicalScreenerMonths, 1,
+  "a locally revised setting beats revisionless cloud data")
+
+const removed = workflow.removeSenderRule(cloudMerged.store,
+  "sync@example.com", NOW + 10000)
+assert.strictEqual(workflow.getSenderRule(removed, "sync@example.com"), null)
+assert.ok(removed.tombstones.senders["sync@example.com"])
+
+const queued = workflow.queueGmailOperation(removed, "thread_1", "Oma/Feed", NOW)
+assert.strictEqual(queued.cloud.gmailOutbox.length, 1)
+const rerouted = workflow.queueGmailOperation(
+  queued, "thread_1", "Oma/PaperTrail", NOW + 1)
+assert.strictEqual(workflow.acknowledgeGmailOperation(
+  rerouted, "thread_1", queued.cloud.gmailOutbox[0].labelName,
+  queued.cloud.gmailOutbox[0].queuedAt).cloud.gmailOutbox.length, 1,
+  "acknowledging an older request preserves a newer reroute")
+assert.strictEqual(workflow.acknowledgeGmailOperation(
+  queued, "thread_1", queued.cloud.gmailOutbox[0].labelName,
+  queued.cloud.gmailOutbox[0].queuedAt).cloud.gmailOutbox.length, 0)
+
+deepEqual(workflow.placementFromLabels(["label_feed"], {
+  "Oma/Inbox": "label_inbox",
+  "Oma/Feed": "label_feed"
+}), {
+  labelKey: "feed",
+  labelName: "Oma/Feed",
+  destination: "feed",
+  pile: null,
+  bubble: false,
+  conflict: false
+})
+assert.strictEqual(workflow.placementFromLabels(["label_screener"], {
+  "Oma/Screener": "label_screener"
+}).destination, "screener")
+
+const v1 = {
+  version: 1,
+  account: "ada@example.com",
+  senders: {},
+  threads: {},
+  domainRules: {},
+  settings: {
+    initialized: true,
+    mirrorGmailLabels: false,
+    routeRepliesToInbox: true,
+    historicalScreenerMonths: 0
+  }
+}
+const migratedV1 = workflow.load(JSON.stringify(v1), "ada@example.com")
+assert.strictEqual(migratedV1.ok, true)
+assert.strictEqual(migratedV1.store.version, 2)
+assert.ok(migratedV1.store.cloud)
 
 console.log("test_workflow.js ok")

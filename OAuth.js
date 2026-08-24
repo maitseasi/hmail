@@ -21,10 +21,15 @@ var CALLBACK_PATH = "/oauth2callback"
 // gmail.modify is read plus label/trash changes — it deliberately cannot
 // permanently delete. gmail.send is what reply and compose need. Neither
 // grants access to the account profile beyond the mailbox address.
+var DRIVE_APPDATA_SCOPE = "https://www.googleapis.com/auth/drive.appdata"
 var SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/gmail.send"
 ]
+
+function cloudScopes() {
+  return SCOPES.concat([DRIVE_APPDATA_SCOPE])
+}
 
 function normalizedPort(value) {
   var port = Math.floor(Number(value))
@@ -81,6 +86,7 @@ function authorizationUrl(options) {
     code_challenge_method: "S256",
     state: settings.state,
     access_type: "offline",
+    include_granted_scopes: "true",
     // Without this Google returns a refresh token only on the very first
     // consent, so a user who reinstalls the plugin would be stuck with an
     // access token that expires in an hour and never comes back.
@@ -326,10 +332,10 @@ function httpResponse(statusLine, body) {
 
 function successResponse(theme) {
   return httpResponse("200 OK", themedPage(theme, {
-    title: "Omamail",
+    title: "Hmail",
     heading: "Mailbox connected",
     failed: false,
-    body: "<p>Omamail can read this mailbox now. "
+    body: "<p>Hmail can read this mailbox now. "
       + "Switch back to the window \u2014 your mail is already loading.</p>"
       + "<p>This tab closes itself. If it stays open, it is safe to close.</p>"
       + "<script>setTimeout(function(){window.close()},600)<\/script>"
@@ -343,6 +349,6 @@ function failureResponse(theme, reason) {
     heading: "Sign-in did not finish",
     failed: true,
     body: "<p>" + (detail ? escapeHtml(detail) : "Google did not complete the authorization.") + "</p>"
-      + "<p>Close this tab and try again from the Omamail window.</p>"
+      + "<p>Close this tab and try again from the Hmail window.</p>"
   }))
 }

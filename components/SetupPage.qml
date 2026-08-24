@@ -167,14 +167,15 @@ Column {
 
       Text {
         width: parent.width
-        text: "Create an OAuth client with application type Desktop app, and enable the Gmail API on the same project."
+        text: "Create an OAuth client with application type Desktop app. Enable the Gmail API now; enable the Drive API too if you want private workflow sync."
         color: root.dimColor
         font.family: root.panelFontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
       }
 
-      Row {
+      Flow {
+        width: parent.width
         spacing: Style.space(8)
 
         Button {
@@ -191,6 +192,14 @@ Column {
           bordered: true
           fontSize: Style.font.bodySmall
           onClicked: root.service.openGmailApiPage()
+        }
+
+        Button {
+          text: "Enable Drive API..."
+          foreground: root.textColor
+          bordered: true
+          fontSize: Style.font.bodySmall
+          onClicked: root.service.openDriveApiPage()
         }
       }
 

@@ -317,7 +317,7 @@ function usingBuiltin(fileText, accountId) {
 
 function path(home) {
   var base = trimmed(home)
-  return (base || "~") + "/.config/omamail/credentials.json"
+  return (base || "~") + "/.config/hmail/credentials.json"
 }
 
 // ----------------------------------------------------------------- keyring
@@ -325,8 +325,8 @@ function path(home) {
 // The refresh token is keyed by account as well as by client, because two
 // accounts may share one client: keyed by client alone, the second sign-in
 // would overwrite the first account's token and silently sign it out.
-var KEYRING_SERVICE = "omamail"
-var RENAMED_KEYRING_SERVICE = "omarchy-gmail"
+var KEYRING_SERVICE = "hmail"
+var RENAMED_KEYRING_SERVICE = "omamail"
 var KEYRING_KIND = "refresh-token"
 
 // secret-tool reads an empty attribute value as "match anything", which would
@@ -358,8 +358,9 @@ function legacyKeyringAttributes(clientId) {
   return ["service", KEYRING_SERVICE, "kind", KEYRING_KIND, "client-id", id]
 }
 
-// Entries from before the Omamail rename are read once and rewritten under
-// the new service name, so an upgrade keeps the user's signed-in session.
+// Entries from before the rename to Hmail (stored by Omamail) are read once
+// and rewritten under the new service name, so an upgrade keeps the user's
+// signed-in session.
 function renamedKeyringAttributes(clientId, accountId) {
   var attributes = keyringAttributes(clientId, accountId)
   if (attributes.length) attributes[1] = RENAMED_KEYRING_SERVICE

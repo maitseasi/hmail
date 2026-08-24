@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "omamail",
-  "name": "Omamail",
+  "id": "hmail",
+  "name": "Hmail",
   "version": "0.1.1",
-  "author": "Jason Lee <huacnlee@gmail.com>",
+  "author": "maitseasi",
   "license": "MIT",
   "description": "Read, triage, and reply to Gmail in a native Omarchy window, over the official Gmail API.",
   "kinds": [
@@ -18,7 +18,7 @@
     "panel": "App.qml"
   },
   "barWidget": {
-    "displayName": "Omamail",
+    "displayName": "Hmail",
     "description": "Unread count in the bar; the mailbox itself opens as its own window.",
     "category": "Communication",
     "aliases": [

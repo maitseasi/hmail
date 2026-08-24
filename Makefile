@@ -1,21 +1,23 @@
 QMLLINT := /usr/lib/qt6/bin/qmllint
 QML_FILES := Service.qml MailAccount.qml BarWidget.qml App.qml \
-	AuthManager.qml GmailApiClient.qml CacheStore.qml BodyCache.qml \
-	WorkflowStore.qml \
+	AuthManager.qml GmailApiClient.qml DriveApiClient.qml CacheStore.qml BodyCache.qml \
+	WorkflowStore.qml WorkflowSync.qml \
 	components/GmailIcon.qml \
 	components/MailboxSidebar.qml \
+	components/MailboxMore.qml \
 	components/MailboxTabs.qml \
 	components/MessageList.qml \
 	components/MessageRow.qml \
 	components/MessageMenu.qml \
 	components/WorkflowActionBar.qml \
 	components/FeedView.qml \
+	components/FeedCard.qml \
 	components/ActionIcon.qml \
 	components/IconButton.qml \
 	components/IconTextButton.qml \
   components/ImagePopover.qml \
   components/KeyHints.qml \
-	components/MessageReader.qml \
+	components/ThreadView.qml \
 	components/ReaderBlankSlate.qml \
 	components/ReaderSkeleton.qml \
 	components/ComposeView.qml \
@@ -38,6 +40,7 @@ test-js:
 	node tests/test_oauth.js
 	node tests/test_credentials.js
 	node tests/test_gmail_api.js
+	node tests/test_drive_api.js
 	node tests/test_message.js
 	node tests/test_html.js
 	node tests/test_cache.js
@@ -45,7 +48,10 @@ test-js:
 	node tests/test_accounts.js
 	node tests/test_workflow.js
 	node tests/test_workflow_store.js
+	node tests/test_workflow_sync.js
 	node tests/test_feed_security.js
+	node tests/test_reader_cache.js
+	node tests/test_historical_thread.js
 	node tests/test_workflow_navigation.js
 
 test-shell:

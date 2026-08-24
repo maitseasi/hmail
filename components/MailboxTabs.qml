@@ -1,11 +1,10 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
-import "../Model.js" as Model
 
-// The mailboxes, as one row of chips. They are searches rather than labels —
-// see Model.MAILBOXES — so "Unread" and "All mail" sit next to "Inbox" without
-// needing a different mechanism.
+// Compact workflow navigation. Storage folders stay behind the final More
+// segment instead of turning a narrow window into a horizontally scrolling
+// Gmail tree.
 Flickable {
   id: root
 
@@ -13,11 +12,12 @@ Flickable {
   required property string panelFontFamily
   property string current: "inbox"
   property int unread: 0
-  property var entries: Model.MAILBOXES
+  property var entries: []
   property var counts: ({})
   property int cursorIndex: -1
 
   signal selected(string key)
+  signal moreRequested(real sceneX, real sceneY)
   signal chipHovered(int index, bool isHovered)
 
   function revealCurrent() {
@@ -42,20 +42,8 @@ Flickable {
   onMailboxesChanged: Qt.callLater(revealCurrent)
   Component.onCompleted: Qt.callLater(revealCurrent)
 
-  // Scrolling a six-segment control in a narrow window is worse than not
-  // offering two of the segments: All mail and Trash are places you go looking
-  // for something, not places you work from, and search reaches both. The
-  // mailbox in view is never dropped, however rarely it is used.
   readonly property bool crowded: measure.implicitWidth > width && width > 0
-  readonly property var mailboxes: {
-    var all = root.entries
-    if (!crowded) return all
-    var out = []
-    for (var i = 0; i < all.length; i++) {
-      if (!all[i].optional || all[i].key === root.current) out.push(all[i])
-    }
-    return out
-  }
+  readonly property var mailboxes: root.entries
 
   width: parent ? parent.width : 0
   implicitHeight: track.height
@@ -129,19 +117,24 @@ Flickable {
           Button {
             id: chip
             anchors.fill: parent
-            // Only the unread mailbox carries a count: repeating it on Inbox
-            // says the same number twice, and the bar already says it once.
-            text: Number(root.counts[segment.modelData.key] || 0) > 0
+            text: segment.modelData.key !== "feed"
+                && segment.modelData.key !== "paper_trail"
+                && Number(root.counts[segment.modelData.key] || 0) > 0
               ? segment.modelData.label + " " + root.counts[segment.modelData.key]
-              : (segment.modelData.key === "unread" && root.unread > 0
-                ? segment.modelData.label + " " + root.unread
-                : segment.modelData.label)
+              : segment.modelData.label
             foreground: root.textColor
             bordered: false
             selected: root.current === segment.modelData.key
             hasCursor: root.cursorIndex === segment.index
             fontSize: Style.font.bodySmall
-            onClicked: root.selected(segment.modelData.key)
+            onClicked: {
+              if (segment.modelData.key === "more") {
+                var scene = mapToGlobal(width, height)
+                root.moreRequested(scene.x, scene.y)
+              } else {
+                root.selected(segment.modelData.key)
+              }
+            }
             onHovered: function(isHovered) { root.chipHovered(segment.index, isHovered) }
           }
         }

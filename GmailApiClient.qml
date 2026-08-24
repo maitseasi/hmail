@@ -124,6 +124,14 @@ Item {
       })
   }
 
+  function getThread(id, callback) {
+    return request("GET", Api.threadPath(id), Api.fullQuery(), null,
+      function(status, payload, error) {
+        if (typeof callback !== "function") return
+        callback(error ? null : Api.parseThread(payload), error)
+      })
+  }
+
   // Fetches every id at once and calls back once, with the results in the
   // order the ids were given rather than the order Google answered in.
   function getMessages(ids, full, callback, existingHandle) {
@@ -192,6 +200,15 @@ Item {
       function(status, payload, error) {
         if (typeof callback !== "function") return
         callback(error ? null : Api.parseProfile(payload), error)
+      })
+  }
+
+  function listHistory(startHistoryId, pageToken, callback) {
+    return request("GET", Api.historyPath(),
+      Api.historyQuery(startHistoryId, pageToken), null,
+      function(status, payload, error) {
+        if (typeof callback !== "function") return
+        callback(error ? null : Api.parseHistory(payload), error, status === 404)
       })
   }
 

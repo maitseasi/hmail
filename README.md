@@ -1,4 +1,4 @@
-# Omamail
+# Hmail
 
 **Gmail as a native Omarchy window — not a browser tab.**
 
@@ -6,7 +6,11 @@ A Quickshell plugin that reads, triages, and answers your mail over the
 official Gmail API. It runs inside the `omarchy-shell` process you already
 have, follows your active theme, and puts an unread count in the bar.
 
-<img width="800" alt="Omamail preview" src="https://github.com/user-attachments/assets/9da73cf7-9b08-421f-b818-bf4fe0e99c00" />
+Hmail is a fork of [Omamail](https://github.com/huacnlee/omamail) by
+Jason Lee, extended with a HEY-style workflow (Screener, Imbox, The Feed,
+Paper Trail) and optional cloud sync of those decisions.
+
+<img width="800" alt="Hmail preview" src="https://github.com/user-attachments/assets/9da73cf7-9b08-421f-b818-bf4fe0e99c00" />
 
 And with mini size mode:
 
@@ -29,14 +33,14 @@ that is what the rest of Omarchy looks like.
 ## Add it to Omarchy
 
 ```bash
-omarchy plugin add https://github.com/huacnlee/omamail.git --enable
+omarchy plugin add https://github.com/maitseasi/hmail.git --enable
 ```
 
 Then click the envelope in the bar. To open it from the keyboard, add this to
 `~/.config/hypr/bindings.lua`:
 
 ```lua
-  o.bind("SUPER + SHIFT + G", "Omamail", "omarchy shell shell toggle omamail '{}'")
+  o.bind("SUPER + SHIFT + G", "Hmail", "omarchy shell shell toggle hmail '{}'")
 ```
 
 The target is `shell`, not the plugin id: the window is summoned by the shell,
@@ -49,16 +53,16 @@ all of which Omarchy already ships.
 To remove it:
 
 ```bash
-omarchy plugin remove omamail
+omarchy plugin remove hmail
 ```
 
 That takes the plugin itself. Nothing it wrote lives inside your Omarchy
 config, so removing those is separate and entirely up to you:
 
 ```bash
-secret-tool clear service omamail    # the refresh token
-rm -rf ~/.config/omamail             # the OAuth client and account list
-rm -rf ~/.cache/omamail              # cached mail
+secret-tool clear service hmail    # the refresh token
+rm -rf ~/.config/hmail             # the OAuth client and account list
+rm -rf ~/.cache/hmail              # cached mail
 ```
 
 Signing out from inside the app clears the keyring entry on its own. The plugin
@@ -68,7 +72,7 @@ above is yours to add and yours to remove.
 ## Connecting your mailbox
 
 Gmail has no shared application to sign in through. Google issues API access
-per Cloud project, so Omamail signs in with an OAuth client **you own**.
+per Cloud project, so Hmail signs in with an OAuth client **you own**.
 The window walks you through it in five steps, each with the console page one
 click away. It takes about two minutes, once.
 
@@ -152,14 +156,30 @@ thousand of them, evicted least-recently-used.
   written over stdin so it never appears in the process table. Two mailboxes
   share one client, so keying by client alone would have let the second sign-in
   overwrite the first.
-- The OAuth client goes to `~/.config/omamail/credentials.json`, mode
+- The OAuth client goes to `~/.config/hmail/credentials.json`, mode
   `0600`. Not to plugin settings — `shell.json` is world-readable.
 - The access token exists only in memory.
 - Signing out clears the keyring entry.
 
 The app asks for `gmail.modify` and `gmail.send`. `gmail.modify` covers reading,
 labelling, archiving and trashing, and deliberately **cannot** delete anything
-permanently.
+permanently. Enabling cloud workflow sync requests `drive.appdata` separately.
+That scope can access only Hmail's hidden configuration area, not normal
+Drive files.
+
+## Workflow synchronization
+
+Cloud workflow sync is opt-in per account. Gmail labels are authoritative for
+conversation placement in Imbox, Feed, Paper Trail and the workflow piles.
+Screener sender decisions, seen state and Bubble Up schedules are merged
+through Drive's private `appDataFolder`; the private local workflow file remains
+the offline replica and retry queue.
+
+Hmail never puts access tokens, refresh tokens, OAuth client credentials,
+message bodies, subjects or rendered content in Drive. Drive data is private to
+the OAuth application and Google account, but it is not end-to-end encrypted.
+Existing Gmail-only grants continue to work if Drive consent is declined or the
+Drive API is unavailable.
 
 ## Development
 
@@ -171,7 +191,7 @@ make validate         # node tests, source regressions, qmllint, manifest check
 Working agreements are in [AGENTS.md](AGENTS.md); the design canvas and the
 implementation plan are under [docs/](docs/).
 
-Omamail is an independent project and is not affiliated with Google.
+Hmail is an independent project and is not affiliated with Google.
 Gmail is a trademark of Google LLC.
 
 Licensed under the [MIT License](LICENSE).

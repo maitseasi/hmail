@@ -16,7 +16,7 @@ Item {
 
   readonly property string dataHome: Quickshell.env("XDG_DATA_HOME")
     || (Quickshell.env("HOME") + "/.local/share")
-  readonly property string directory: dataHome + "/omamail/workflow"
+  readonly property string directory: dataHome + "/hmail/workflow"
 
   property string accountId: ""
   readonly property string path: accountId === ""
@@ -31,6 +31,15 @@ Item {
 
   signal restored()
   signal saved()
+  signal changed()
+
+  function commit(next) {
+    if (!writable || !next || next === store) return false
+    store = next
+    scheduleSave()
+    changed()
+    return true
+  }
 
   function getSenderRule(sender) {
     return Workflow.getSenderRule(store, sender)
@@ -40,18 +49,14 @@ Item {
     if (!writable) return false
     var next = Workflow.setSenderRule(store, sender, rule, Date.now())
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
   }
 
   function removeSenderRule(sender) {
     if (!writable) return false
     var next = Workflow.removeSenderRule(store, sender)
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
   }
 
   function getThreadState(threadId) {
@@ -62,63 +67,57 @@ Item {
     if (!writable) return false
     var next = Workflow.setThreadState(store, threadId, state, Date.now())
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
+  }
+
+  function projectThreadPlacement(threadId, state) {
+    if (!writable) return false
+    var next = Workflow.projectThreadPlacement(store, threadId, state)
+    if (next === store) return false
+    // This changes only the local Gmail projection. Persist it for offline UI,
+    // but do not mark Drive pending or create a portable revision.
+    return commit(next)
   }
 
   function markSeen(threadId, messageId) {
     if (!writable) return false
     var next = Workflow.markSeen(store, threadId, messageId, Date.now())
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
   }
 
   function markUnseen(threadId) {
     if (!writable) return false
     var next = Workflow.markUnseen(store, threadId, Date.now())
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
   }
 
   function setPile(threadId, pile) {
     if (!writable) return false
     var next = Workflow.setPile(store, threadId, pile, Date.now())
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
   }
 
   function scheduleBubble(threadId, at) {
     if (!writable) return false
     var next = Workflow.scheduleBubble(store, threadId, at, Date.now())
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
   }
 
   function cancelBubble(threadId) {
     if (!writable) return false
     var next = Workflow.cancelBubble(store, threadId, Date.now())
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
   }
 
   function processDueBubbles() {
     if (!writable) return []
     var result = Workflow.processDueBubbles(store, Date.now())
-    if (result.store !== store) {
-      store = result.store
-      scheduleSave()
-    }
+    if (result.store !== store) commit(result.store)
     return result.threadIds
   }
 
@@ -126,18 +125,37 @@ Item {
     if (!writable) return false
     var next = Workflow.setSetting(store, name, value)
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
   }
 
   function initializeExistingInbox(messages) {
     if (!writable) return false
     var next = Workflow.initializeExistingInbox(store, messages, Date.now())
     if (next === store) return false
-    store = next
-    scheduleSave()
-    return true
+    return commit(next)
+  }
+
+  function setCloudState(values) {
+    if (!writable) return false
+    return commit(Workflow.setCloudState(store, values))
+  }
+
+  function mergeCloud(remote) {
+    if (!writable) return { ok: false, error: "Local workflow data is read-only" }
+    var result = Workflow.mergeCloud(store, remote)
+    if (result.ok) commit(result.store)
+    return result
+  }
+
+  function queueGmailOperation(threadId, labelName) {
+    if (!writable) return false
+    return commit(Workflow.queueGmailOperation(store, threadId, labelName, Date.now()))
+  }
+
+  function acknowledgeGmailOperation(threadId, labelName, queuedAt) {
+    if (!writable) return false
+    return commit(Workflow.acknowledgeGmailOperation(
+      store, threadId, labelName, queuedAt))
   }
 
   function scheduleSave() {
@@ -197,7 +215,16 @@ Item {
       root.loaded = true
       root.writable = result.ok
       root.lastError = result.error
-      if (result.ok) root.store = result.store
+      if (result.ok) {
+        var next = result.store
+        if (!next.deviceId) {
+          var generated = "device_" + Date.now().toString(36)
+            + "_" + Math.floor(Math.random() * 0x7fffffff).toString(36)
+          next = Workflow.setDeviceId(next, generated)
+        }
+        root.store = next
+        root.scheduleSave()
+      }
       root.restored()
     }
 

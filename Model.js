@@ -66,7 +66,7 @@ function setupHeadline(state) {
 function setupDetail(state, missingTools) {
   if (state === "tools_missing") {
     var tools = Array.isArray(missingTools) ? missingTools.join(", ") : ""
-    return "Omamail needs " + (tools || "a few base tools")
+    return "Hmail needs " + (tools || "a few base tools")
       + " on PATH before it can sign in."
   }
   if (state === "no_credentials")

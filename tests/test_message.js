@@ -236,6 +236,10 @@ assert.strictEqual(message.replySubject("Invoice"), "Re: Invoice")
 assert.strictEqual(message.replySubject("Re: Invoice"), "Re: Invoice", "Re: is not stacked")
 assert.strictEqual(message.replySubject("RE: Invoice"), "RE: Invoice")
 assert.strictEqual(message.replySubject(""), "Re: (no subject)")
+assert.strictEqual(message.replyReferences({
+  references: "<first@example.com>",
+  messageId: "<second@example.com>"
+}), "<first@example.com> <second@example.com>")
 
 const raw = message.buildRawMessage({
   to: "jane@example.com",

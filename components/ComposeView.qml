@@ -27,6 +27,7 @@ Item {
   property string mode: "new"
   property string threadId: ""
   property string inReplyTo: ""
+  property string references: ""
   property bool ccVisible: false
 
   readonly property string title: {
@@ -50,6 +51,7 @@ Item {
     mode = "new"
     threadId = ""
     inReplyTo = ""
+    references = ""
     ccVisible = false
   }
 
@@ -77,6 +79,7 @@ Item {
         ? summary.replyTo.email : summary.from.email
       threadId = summary.threadId
       inReplyTo = summary.messageId
+      references = Mail.replyReferences(summary)
 
       if (mode === "forward") {
         subjectField.text = "Fwd: " + summary.subject
@@ -115,7 +118,8 @@ Item {
       body: bodyEdit.text,
       // A forward starts a new conversation; a reply must stay in the old one.
       threadId: root.mode === "forward" ? "" : root.threadId,
-      inReplyTo: root.mode === "forward" ? "" : root.inReplyTo
+      inReplyTo: root.mode === "forward" ? "" : root.inReplyTo,
+      references: root.mode === "forward" ? "" : root.references
     }))
   }
 

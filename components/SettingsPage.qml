@@ -179,47 +179,181 @@ Column {
     font.letterSpacing: 1
   }
 
-  Item {
+  Column {
     width: parent.width
-    implicitHeight: Math.max(workflowText.implicitHeight, workflowButton.implicitHeight)
+    spacing: Style.space(7)
 
-    Column {
-      id: workflowText
-      anchors.left: parent.left
-      anchors.right: workflowButton.left
-      anchors.rightMargin: Style.space(10)
-      anchors.verticalCenter: parent.verticalCenter
-      spacing: Style.space(2)
+    Text {
+      width: parent.width
+      text: "Cloud workflow sync"
+      color: root.textColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
 
-      Text {
-        width: parent.width
-        text: "Mirror workflow labels to Gmail"
-        color: root.textColor
-        font.family: root.panelFontFamily
-        font.pixelSize: Style.font.bodySmall
+    Text {
+      width: parent.width
+      text: "Gmail labels keep conversation placement. Private Drive app data keeps Screener rules, seen state, and Bubble Up schedules. Message contents and credentials are never uploaded."
+      textFormat: Text.PlainText
+      color: root.dimColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    Flow {
+      width: parent.width
+      spacing: Style.space(8)
+
+      Button {
+        text: root.service && root.service.workflowCloudEnabled
+          ? "Disable sync" : "Enable sync..."
+        foreground: root.textColor
+        selected: root.service && root.service.workflowCloudEnabled
+        bordered: true
+        fontSize: Style.font.bodySmall
+        enabled: root.service && root.service.workflowWritable
+          && !root.service.workflowCloudBusy
+        onClicked: {
+          if (root.service.workflowCloudEnabled) root.service.disableCloudSync()
+          else root.service.enableCloudSync()
+        }
       }
 
-      Text {
-        width: parent.width
-        text: "Optional. Local sender decisions remain canonical."
-        color: root.dimColor
-        font.family: root.panelFontFamily
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
+      Button {
+        text: "Sync now"
+        foreground: root.textColor
+        bordered: true
+        fontSize: Style.font.bodySmall
+        visible: root.service && root.service.workflowCloudEnabled
+        enabled: visible && !root.service.workflowCloudBusy
+        onClicked: root.service.syncWorkflowNow()
+      }
+
+      Button {
+        text: "Reconnect..."
+        foreground: root.textColor
+        bordered: true
+        fontSize: Style.font.bodySmall
+        visible: root.service && root.service.workflowCloudEnabled
+          && root.service.workflowCloudError !== ""
+        onClicked: root.service.enableCloudSync()
+      }
+
+      Button {
+        text: "Enable Drive API..."
+        foreground: root.textColor
+        bordered: true
+        fontSize: Style.font.bodySmall
+        visible: root.service && root.service.workflowCloudError !== ""
+        onClicked: root.service.openDriveApiPage()
       }
     }
 
-    Button {
-      id: workflowButton
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      text: root.service && root.service.workflowMirroring ? "On" : "Off"
-      foreground: root.textColor
-      selected: root.service && root.service.workflowMirroring
-      bordered: true
-      fontSize: Style.font.bodySmall
-      enabled: root.service && root.service.workflowWritable
-      onClicked: root.service.setWorkflowMirroring(!root.service.workflowMirroring)
+    Text {
+      width: parent.width
+      visible: root.service && (root.service.workflowCloudStatus !== ""
+        || root.service.workflowCloudError !== "")
+      text: root.service && root.service.workflowCloudError !== ""
+        ? root.service.workflowCloudError
+        : (root.service ? root.service.workflowCloudStatus : "")
+      textFormat: Text.PlainText
+      color: root.dimColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+  }
+
+  Column {
+    width: parent.width
+    spacing: Style.space(7)
+
+    Text {
+      width: parent.width
+      text: "Historical Screener"
+      color: root.textColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    Text {
+      width: parent.width
+      text: "Find one recent Inbox message per unknown sender. Scanning starts only when requested."
+      color: root.dimColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    Row {
+      spacing: Style.space(4)
+
+      Repeater {
+        model: [
+          ({ label: "Off", months: 0 }),
+          ({ label: "1 month", months: 1 }),
+          ({ label: "2 months", months: 2 }),
+          ({ label: "3 months", months: 3 })
+        ]
+
+        Button {
+          required property var modelData
+          text: modelData.label
+          foreground: root.textColor
+          selected: root.service
+            && root.service.historicalScreenerMonths === modelData.months
+          bordered: true
+          fontSize: Style.font.caption
+          enabled: root.service && root.service.workflowWritable
+            && !root.service.historicalScreenerScanning
+          onClicked: root.service.setHistoricalScreenerMonths(modelData.months)
+        }
+      }
+    }
+
+    Row {
+      spacing: Style.space(6)
+
+      Button {
+        visible: !root.service || !root.service.historicalScreenerScanning
+        text: root.service && root.service.historicalScreenerCanResume
+          ? "Resume scan" : "Scan Inbox now"
+        foreground: root.textColor
+        bordered: true
+        fontSize: Style.font.bodySmall
+        enabled: root.service && root.service.ready
+          && root.service.historicalScreenerMonths > 0
+        onClicked: root.service.startHistoricalScreenerScan()
+      }
+
+      Button {
+        visible: root.service && root.service.historicalScreenerScanning
+        text: "Pause scan"
+        foreground: root.dimColor
+        bordered: true
+        fontSize: Style.font.bodySmall
+        onClicked: root.service.cancelHistoricalScreenerScan()
+      }
+    }
+
+    Text {
+      visible: root.service && (root.service.historicalScreenerChecked > 0
+        || root.service.historicalScreenerScanning)
+      width: parent.width
+      text: (root.service ? root.service.historicalScreenerChecked : 0)
+        + " messages checked · "
+        + (root.service ? root.service.historicalScreenerFound : 0)
+        + " unknown senders"
+        + (root.service && root.service.historicalScreenerScanning ? " · scanning…" : "")
+        + (root.service && !root.service.historicalScreenerScanning
+          && root.service.historicalScreenerLastScanMs > 0
+          ? " · last " + new Date(root.service.historicalScreenerLastScanMs).toLocaleString()
+          : "")
+      color: root.dimColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
     }
   }
 
@@ -295,14 +429,14 @@ Column {
           spacing: Style.space(3)
 
           Button {
-            text: "Inbox"
+            text: "Imbox"
             foreground: root.textColor
             bordered: false
             fontSize: Style.font.caption
             onClicked: root.service.setSenderDestination(ruleRow.modelData.sender, "inbox")
           }
           Button {
-            text: "Feed"
+            text: "The Feed"
             foreground: root.textColor
             bordered: false
             fontSize: Style.font.caption

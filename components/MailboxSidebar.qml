@@ -4,12 +4,8 @@ import qs.Commons
 import qs.Ui
 import "../Model.js" as Model
 
-// The left column: the six built-in mailboxes, then whatever labels the user
-// has made.
-//
-// Icon-first, and narrow enough to leave open: the longest mailbox name is
-// "All mail". Collapsing it to a strip of icons is one click away, and the
-// tooltips carry the names either way, so the collapsed rail stays usable.
+// The permanent navigation is the workflow, not Gmail's storage model.
+// Occasional folders and labels live behind More so this column stays calm.
 Item {
   id: root
 
@@ -18,38 +14,48 @@ Item {
   required property color accentColor
   required property color dimColor
   required property string panelFontFamily
+  // Compatibility input while App migrates saved "collapsed" preferences to a
+  // fully hidden sidebar.
   property bool collapsed: false
 
-  signal mailboxSelected(string key)
   signal workflowSelected(string key)
-  signal labelSelected(string labelId, string name)
+  signal moreRequested(real sceneX, real sceneY)
 
-  // Forwarded to the user bar, which is the control those popups hang off.
   property bool switcherOpen: false
   signal switcherRequested(real sceneX, real sceneY)
 
-  readonly property var userLabels: {
-    var all = root.service ? root.service.labels : []
-    var out = []
-    for (var i = 0; i < all.length; i++) {
-      if (!all[i].system) out.push(all[i])
-    }
-    return out
-  }
-  readonly property var workflowEntries: [
+  readonly property var primaryEntries: [
     { key: "screener", label: "Screener", icon: "eye" },
-    { key: "inbox", label: "Inbox", icon: "inbox" },
-    { key: "feed", label: "Feed", icon: "unread" },
-    { key: "paper_trail", label: "Paper Trail", icon: "archive" },
+    { key: "inbox", label: "Imbox", icon: "inbox" },
+    { key: "feed", label: "The Feed", icon: "unread" },
+    { key: "paper_trail", label: "The Paper Trail", icon: "archive" }
+  ]
+  readonly property var pileEntries: [
     { key: "reply_later", label: "Reply Later", icon: "reply" },
     { key: "set_aside", label: "Set Aside", icon: "label" },
-    { key: "bubble_up", label: "Bubble Up", icon: "refresh" },
+    { key: "bubble_up", label: "Bubble Up", icon: "refresh" }
+  ]
+  readonly property var libraryEntries: [
     { key: "previously_seen", label: "Seen", icon: "check" },
     { key: "everything", label: "Everything", icon: "archive" }
   ]
+  readonly property bool hasActivePiles: {
+    var counts = root.service ? root.service.workflowCounts : ({})
+    for (var i = 0; i < pileEntries.length; i++) {
+      if (Number(counts[pileEntries[i].key] || 0) > 0) return true
+    }
+    return false
+  }
+  readonly property var compactEntries: {
+    var out = primaryEntries.slice()
+    var counts = root.service ? root.service.workflowCounts : ({})
+    for (var i = 0; i < pileEntries.length; i++) {
+      if (Number(counts[pileEntries[i].key] || 0) > 0) out.push(pileEntries[i])
+    }
+    out.push({ key: "more", label: "More", icon: "menu" })
+    return out
+  }
 
-  // The rail's own edge. The list already draws one on its far side, so
-  // without this the icons sit on the same surface as the messages.
   PanelSeparator {
     id: edge
     anchors.right: parent.right
@@ -74,119 +80,63 @@ Item {
     Column {
       id: column
       x: Style.space(6)
-      y: Style.space(6)
+      y: Style.space(10)
       width: flick.width - Style.space(12)
-      spacing: Style.space(1)
-
-      PanelSectionHeader {
-        visible: !root.collapsed
-        leftPadding: Style.space(8)
-        bottomPadding: Style.space(3)
-        text: "WORKFLOW"
-        foreground: root.textColor
-        fontFamily: root.panelFontFamily
-      }
+      spacing: Style.space(2)
 
       Repeater {
-        model: root.workflowEntries
-
+        model: root.primaryEntries
         Entry {
           required property var modelData
           label: modelData.label
           icon: modelData.icon
-          count: root.service && root.service.workflowCounts
-            ? Number(root.service.workflowCounts[modelData.key] || 0) : 0
-          selected: !!root.service && root.service.workflowEnabled
-            && root.service.workflowKey === modelData.key
+          showCount: modelData.key === "screener" || modelData.key === "inbox"
+          count: root.workflowCount(modelData.key)
+          selected: root.workflowSelectedKey(modelData.key)
           onActivated: root.workflowSelected(modelData.key)
         }
       }
 
-      Item {
-        width: parent.width
-        implicitHeight: Style.space(12)
+      GroupRule { visible: root.hasActivePiles; topPad: Style.space(4) }
 
-        PanelSeparator {
-          anchors.verticalCenter: parent.verticalCenter
-          width: parent.width
-          foreground: root.textColor
+      Repeater {
+        model: root.pileEntries
+        Entry {
+          required property var modelData
+          visible: count > 0
+          label: modelData.label
+          icon: modelData.icon
+          showCount: true
+          count: root.workflowCount(modelData.key)
+          selected: root.workflowSelectedKey(modelData.key)
+          onActivated: root.workflowSelected(modelData.key)
         }
       }
 
-      PanelSectionHeader {
-        visible: !root.collapsed
-        leftPadding: Style.space(8)
-        bottomPadding: Style.space(3)
-        text: "GMAIL"
-        foreground: root.textColor
-        fontFamily: root.panelFontFamily
-      }
+      GroupRule { topPad: Style.space(4) }
 
       Repeater {
-        model: Model.MAILBOXES
-
+        model: root.libraryEntries
         Entry {
           required property var modelData
           label: modelData.label
           icon: modelData.icon
-          // No count on the mailboxes. An inbox that is thousands of messages
-          // deep reports "999+" forever, which is a number that never changes
-          // and therefore says nothing. The bar's dot carries whether anything
-          // is waiting; the labels below still count, because those are lists
-          // the user built and their sizes mean something.
-          count: 0
-          selected: !!root.service && !root.service.workflowEnabled
-            && root.service.mailboxKey === modelData.key
-            && root.service.searchQuery === ""
-          onActivated: root.mailboxSelected(modelData.key)
+          selected: root.workflowSelectedKey(modelData.key)
+          onActivated: root.workflowSelected(modelData.key)
         }
       }
 
-      Item {
-        width: parent.width
-        implicitHeight: Style.space(12)
-        visible: root.userLabels.length > 0
-
-        PanelSeparator {
-          anchors.verticalCenter: parent.verticalCenter
-          width: parent.width
-          foreground: root.textColor
-        }
-      }
-
-      PanelSectionHeader {
-        visible: root.userLabels.length > 0 && !root.collapsed
-        leftPadding: Style.space(8)
-        bottomPadding: Style.space(3)
-        text: "LABELS"
-        foreground: root.textColor
-        fontFamily: root.panelFontFamily
-      }
-
-      Repeater {
-        model: root.userLabels
-
-        Entry {
-          required property var modelData
-          label: modelData.name
-          // One tag for every user label. An initial letter fails the moment a
-          // label is not written in the Latin alphabet — a Chinese label would
-          // put a single hanzi in a 16px slot, which is neither an icon nor a
-          // readable name. The tooltip carries the name instead.
-          icon: "label"
-          count: modelData.unread
-          selected: !!root.service
-            && root.service.searchQuery === "label:" + modelData.rawName
-          onActivated: root.labelSelected(modelData.id, modelData.rawName)
+      Entry {
+        label: "More…"
+        icon: "menu"
+        onActivated: {
+          var scene = mapToGlobal(width, 0)
+          root.moreRequested(scene.x, scene.y)
         }
       }
     }
   }
 
-  // The account lives at the foot of the rail, which is where a desktop app
-  // keeps it. The control that shows and hides the rail is in the header
-  // instead — a button that can disappear with the thing it toggles is a
-  // button you cannot press to get it back.
   Column {
     id: footer
     anchors.left: parent.left
@@ -206,35 +156,57 @@ Item {
       panelFontFamily: root.panelFontFamily
       email: root.service ? root.service.accountEmail : ""
       accountCount: root.service ? root.service.accountCount : 1
-      collapsed: root.collapsed
+      collapsed: false
       switcherOpen: root.switcherOpen
-      onSwitcherRequested: function(sceneX, sceneY) { root.switcherRequested(sceneX, sceneY) }
+      onSwitcherRequested: function(sceneX, sceneY) {
+        root.switcherRequested(sceneX, sceneY)
+      }
     }
-
   }
 
-  // One row: an icon that is always there, a name that appears when there is
-  // room, and a count that survives the collapse as a dot.
+  function workflowCount(key) {
+    return root.service && root.service.workflowCounts
+      ? Number(root.service.workflowCounts[key] || 0) : 0
+  }
+
+  function workflowSelectedKey(key) {
+    return !!root.service && root.service.workflowEnabled
+      && root.service.workflowKey === key
+  }
+
+  component GroupRule: Item {
+    property real topPad: 0
+    width: column.width
+    implicitHeight: Style.space(14) + topPad
+    PanelSeparator {
+      anchors.bottom: parent.bottom
+      anchors.bottomMargin: Style.space(7)
+      width: parent.width
+      foreground: root.textColor
+    }
+  }
+
   component Entry: Rectangle {
     id: entry
     required property string label
     property string icon: ""
     property int count: 0
+    property bool showCount: false
     property bool selected: false
     signal activated()
 
     width: column.width
-    implicitHeight: Style.space(28)
+    implicitHeight: Style.space(32)
     radius: Style.cornerRadius
     color: entry.selected
       ? Style.selectedFillFor(root.textColor, root.accentColor)
-      : (hover.hovered ? Style.hoverFillFor(root.textColor, root.accentColor) : "transparent")
+      : (hover.hovered
+        ? Style.hoverFillFor(root.textColor, root.accentColor) : "transparent")
 
     ActionIcon {
       id: glyph
       anchors.left: parent.left
-      anchors.leftMargin: root.collapsed
-        ? (parent.width - width) / 2 : Style.space(8)
+      anchors.leftMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
       name: entry.icon
       iconSize: Style.font.icon
@@ -242,7 +214,6 @@ Item {
     }
 
     Text {
-      visible: !root.collapsed
       anchors.left: glyph.right
       anchors.leftMargin: Style.space(9)
       anchors.right: badge.visible ? badge.left : parent.right
@@ -258,7 +229,7 @@ Item {
 
     Text {
       id: badge
-      visible: entry.count > 0 && !root.collapsed
+      visible: entry.showCount && entry.count > 0
       anchors.right: parent.right
       anchors.rightMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
@@ -269,26 +240,13 @@ Item {
       font.bold: true
     }
 
-    Rectangle {
-      visible: entry.count > 0 && root.collapsed
-      anchors.right: parent.right
-      anchors.rightMargin: Style.space(3)
-      anchors.top: parent.top
-      anchors.topMargin: Style.space(4)
-      width: Style.space(5)
-      height: width
-      radius: width / 2
-      color: root.accentColor
-    }
-
     HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
     TapHandler { onTapped: entry.activated() }
 
-    // The tooltip is how the rail stays usable while collapsed, and it carries
-    // the count too, which the dot can only hint at.
     PanelToolTip {
       visible: hover.hovered
-      text: entry.count > 0 ? entry.label + " · " + entry.count : entry.label
+      text: entry.showCount && entry.count > 0
+        ? entry.label + " · " + entry.count : entry.label
       fontFamily: root.panelFontFamily
     }
   }

@@ -123,6 +123,7 @@ function modifyThreadPath(id) { return "/users/me/threads/" + encode(id) + "/mod
 function labelsPath() { return "/users/me/labels" }
 function labelPath(id) { return "/users/me/labels/" + encode(id) }
 function profilePath() { return "/users/me/profile" }
+function historyPath() { return "/users/me/history" }
 function attachmentPath(messageId, attachmentId) {
   return "/users/me/messages/" + encode(messageId) + "/attachments/" + encode(attachmentId)
 }
@@ -144,6 +145,68 @@ function metadataQuery() {
 
 function fullQuery() {
   return { format: "full" }
+}
+
+function historyQuery(startHistoryId, pageToken) {
+  return {
+    startHistoryId: String(startHistoryId || ""),
+    historyTypes: ["labelAdded", "labelRemoved"],
+    pageToken: String(pageToken || ""),
+    maxResults: 100
+  }
+}
+
+function parseHistory(payload) {
+  var body = payload && typeof payload === "object" ? payload : {}
+  var history = Array.isArray(body.history) ? body.history : []
+  var threadIds = []
+  var seen = {}
+  var latestLabelIdByThread = {}
+  for (var i = 0; i < history.length; i++) {
+    var groups = ["labelsAdded", "labelsRemoved"]
+    for (var g = 0; g < groups.length; g++) {
+      var entries = Array.isArray(history[i][groups[g]]) ? history[i][groups[g]] : []
+      for (var j = 0; j < entries.length; j++) {
+        var messages = entries[j] && Array.isArray(entries[j].messages)
+          ? entries[j].messages : []
+        for (var k = 0; k < messages.length; k++) {
+          var threadId = String(messages[k] && messages[k].threadId || "")
+          if (threadId && !seen[threadId]) {
+            seen[threadId] = true
+            threadIds.push(threadId)
+          }
+          var changedLabels = Array.isArray(entries[j].labelIds)
+            ? entries[j].labelIds : []
+          if (threadId && changedLabels.length > 0) {
+            if (groups[g] === "labelsAdded")
+              latestLabelIdByThread[threadId] =
+                String(changedLabels[changedLabels.length - 1] || "")
+            else if (changedLabels.indexOf(latestLabelIdByThread[threadId]) >= 0)
+              latestLabelIdByThread[threadId] = ""
+          }
+        }
+      }
+    }
+  }
+  return {
+    historyId: String(body.historyId || ""),
+    nextPageToken: String(body.nextPageToken || ""),
+    threadIds: threadIds,
+    latestLabelIdByThread: latestLabelIdByThread
+  }
+}
+
+function parseThread(payload) {
+  var body = payload && typeof payload === "object" ? payload : {}
+  var messages = arrayValues(body.messages).slice()
+  messages.sort(function(a, b) {
+    return (Number(a && a.internalDate) || 0) - (Number(b && b.internalDate) || 0)
+  })
+  return {
+    id: String(body.id || ""),
+    historyId: String(body.historyId || ""),
+    messages: messages
+  }
 }
 
 // ---------------------------------------------------------------- parsing

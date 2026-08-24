@@ -515,6 +515,8 @@ function summarize(message, now) {
     // carries the real values.
     replyTo: parseAddress(headerValue(message, "Reply-To")),
     messageId: headerValue(message, "Message-ID"),
+    inReplyTo: headerValue(message, "In-Reply-To"),
+    references: headerValue(message, "References"),
     to: parseAddressList(headerValue(message, "To")),
     subject: subject || "(no subject)",
     snippet: decodeSnippet(message && message.snippet),
@@ -574,6 +576,12 @@ function replySubject(subject) {
   var text = String(subject || "").trim()
   if (/^re:/i.test(text)) return text
   return "Re: " + (text || "(no subject)")
+}
+
+function replyReferences(summary) {
+  var existing = referenceValue(summary && summary.references)
+  var messageId = referenceValue(summary && summary.messageId)
+  return (existing + (existing && messageId ? " " : "") + messageId).trim()
 }
 
 // A minimal RFC 5322 message. Gmail wants the whole thing base64url encoded in
