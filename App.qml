@@ -56,6 +56,53 @@ Item {
 
   property string currentView: "list"
   property string cursorId: ""
+  property var selectedIds: ({})
+  property int selectedCount: 0
+  readonly property bool multiSelectActive: selectedCount > 0
+
+  function toggleSelect(id) {
+    var s = selectedIds
+    if (s[id]) { delete s[id] } else { s[id] = true }
+    selectedIds = s
+    selectedCount = Object.keys(s).length
+  }
+  function clearSelection() {
+    selectedIds = {}
+    selectedCount = 0
+  }
+  function bulkAct(fn) {
+    var ids = Object.keys(selectedIds)
+    for (var i = 0; i < ids.length; i++) fn(ids[i])
+    clearSelection()
+  }
+
+  property var readTogetherQueue: []
+  property int readTogetherIndex: 0
+  readonly property bool readingTogether: readTogetherQueue.length > 0
+
+  function startReadTogether() {
+    var ids = Object.keys(selectedIds)
+    if (ids.length === 0) return
+    clearSelection()
+    readTogetherQueue = ids
+    readTogetherIndex = 0
+    openMessage(ids[0])
+  }
+  function nextReadTogether() {
+    if (readTogetherIndex + 1 >= readTogetherQueue.length) {
+      readTogetherQueue = []
+      readTogetherIndex = 0
+      backToList()
+      return
+    }
+    readTogetherIndex++
+    openMessage(readTogetherQueue[readTogetherIndex])
+  }
+  function exitReadTogether() {
+    readTogetherQueue = []
+    readTogetherIndex = 0
+  }
+
   // Kept across messages: somebody who wants plain text wants it for their
   // mail, not for one message.
   property bool plainTextForced: false
@@ -95,6 +142,8 @@ Item {
   readonly property bool composing: compose.opened
   readonly property bool showingFeed: !!service && service.workflowEnabled
     && service.workflowKey === "feed"
+  readonly property bool imboxSinglePane: !!service && service.workflowEnabled
+    && service.workflowKey === "inbox" && currentView === "list"
   property bool powerThroughActive: false
   // Exit power-through whenever the user navigates away.
   onCurrentViewChanged: powerThroughActive = false
@@ -190,6 +239,7 @@ Item {
 
   function goWorkflow(key) {
     if (!service) return
+    clearSelection()
     service.selectWorkflow(key)
     backToList()
     Qt.callLater(function() {
@@ -446,7 +496,7 @@ Item {
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.margins: Style.space(14)
-          visible: root.compact && !root.showPage && !root.composing && root.currentView === "list"
+          visible: false
           textColor: root.foreground
           panelFontFamily: root.fontFamily
           entries: sidebar.compactEntries
@@ -472,6 +522,7 @@ Item {
           // to work when the message is what you are reading. Refusing to go
           // there was the app deciding how someone else should use their screen.
           width: root.powerThroughActive ? 0
+            : root.imboxSinglePane ? parent.width
             : root.compact
               ? (root.currentView === "list" ? parent.width : 0)
               : Math.max(Style.space(100),
@@ -493,7 +544,10 @@ Item {
             MessageList {
               id: list
               y: Style.space(8)
-              width: listFlick.width - Style.space(14)
+              width: root.imboxSinglePane
+                ? Math.min(Style.space(680), listFlick.width - Style.space(28))
+                : listFlick.width - Style.space(14)
+              anchors.horizontalCenter: root.imboxSinglePane ? parent.horizontalCenter : undefined
               service: root.service
               textColor: root.foreground
               accentColor: root.accent
@@ -501,12 +555,21 @@ Item {
               panelFontFamily: root.fontFamily
               cursorId: root.cursorId
               viewport: listFlick
-              onMessageActivated: function(id) { root.openMessage(id) }
+              checkedIds: root.selectedIds
+              onMessageActivated: function(id) {
+                if (root.multiSelectActive) root.toggleSelect(id)
+                else root.openMessage(id)
+              }
               onRowHovered: function(id, isHovered) { if (isHovered) root.cursorId = id }
               onMenuRequested: function(id, sceneX, sceneY) {
                 root.cursorId = id
                 rowMenu.openAt(id, sceneX, sceneY)
               }
+              onQuickActionsRequested: function(id, sceneX, sceneY) {
+                root.cursorId = id
+                quickActions.openAt(id, sceneX, sceneY)
+              }
+              onSelectToggled: function(id) { root.toggleSelect(id) }
               onScreenerRequested: root.goWorkflow("screener")
               onPowerThroughRequested: root.powerThroughActive = true
             }
@@ -543,7 +606,7 @@ Item {
           anchors.top: parent.top
           anchors.bottom: parent.bottom
           width: Style.space(5)
-          visible: listColumn.visible && !root.compact
+          visible: listColumn.visible && !root.compact && !root.imboxSinglePane
           z: 5
 
           PanelSeparator {
@@ -715,6 +778,7 @@ Item {
           visible: !root.powerThroughActive && !root.showPage && !root.composing
             && (!root.showingFeed || root.currentView === "reader")
             && (!root.compact || root.currentView === "reader")
+            && !root.imboxSinglePane
           service: root.service
           textColor: root.foreground
           backgroundColor: root.background
@@ -724,8 +788,20 @@ Item {
           dimmerColor: root.dimmer
           panelFontFamily: root.fontFamily
           zoom: root.bodyZoom
-          onBackRequested: root.backToList()
+          onBackRequested: {
+            if (root.readingTogether) root.exitReadTogether()
+            root.backToList()
+          }
           onForwardRequested: root.startCompose("forward")
+          onReplyAllRequested: root.startCompose("replyAll")
+          onLabelRequested: {
+            if (root.service && root.service.selectedId !== "")
+              labelPicker.openFor(root.service.selectedId)
+          }
+          onSenderSearchRequested: function(email) {
+            root.backToList()
+            if (root.service) root.service.search("from:" + email)
+          }
           onActionRequested: function(action) {
             if (root.service && root.service.selectedId !== "") {
               root.cursorId = root.service.selectedId
@@ -736,6 +812,37 @@ Item {
 
         // Composing takes the whole body. Omarchy's panel mechanism would give
         // a second window its own region, which is not what a reply is.
+        Rectangle {
+          visible: root.readingTogether && root.currentView === "reader"
+          anchors.top: reader.top
+          anchors.horizontalCenter: reader.horizontalCenter
+          anchors.topMargin: Style.space(8)
+          z: 20
+          width: rtLabel.implicitWidth + Style.space(20)
+          height: Style.space(26)
+          radius: Style.space(13)
+          color: Color.popups.background
+          border.width: 1; border.color: Color.popups.border
+          Row {
+            id: rtLabel
+            anchors.centerIn: parent
+            spacing: Style.space(6)
+            Text {
+              text: "Reading " + (root.readTogetherIndex + 1)
+                + " of " + root.readTogetherQueue.length
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              text: "Shift+N \u2192 next"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+
         ComposeView {
           id: compose
           anchors.fill: parent
@@ -830,6 +937,575 @@ Item {
               onRemoveRequested: function(index) {
                 if (root.service) root.service.removeAccountAt(index)
               }
+            }
+          }
+        }
+      }
+
+      // ── HEY-style pile cards (Imbox bottom) ────────────────────────────
+
+      readonly property bool showActionTray: !!root.service
+        && root.service.workflowEnabled
+        && root.service.workflowKey === "inbox"
+        && root.currentView === "list"
+        && !root.showPage && !root.composing
+        && !root.powerThroughActive && !root.showingFeed
+        && !root.multiSelectActive
+
+      Row {
+        id: actionTray
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: statusBar.top
+        anchors.bottomMargin: Style.space(4)
+        spacing: Style.space(8)
+        visible: parent.showActionTray
+        z: 10
+
+        readonly property var counts: root.service ? root.service.workflowCounts : ({})
+        readonly property int rlCount: Number(counts["reply_later"] || 0)
+        readonly property int saCount: Number(counts["set_aside"] || 0)
+
+        function _avatarHue(email) {
+          var s = email || ""
+          var h = 0
+          for (var i = 0; i < s.length; i++)
+            h = (h * 31 + s.charCodeAt(i)) % 360
+          return h / 360
+        }
+
+        PileCard {
+          id: rlCard
+          visible: actionTray.rlCount > 0
+          icon: "\u21A9"
+          pileLabel: "Reply Later"
+          count: actionTray.rlCount
+          preview: root.service ? root.service.replyLaterPreview : []
+          goLabel: "Go to Focus & Reply\u2026"
+          onActivated: {
+            if (count <= 1) { root.goWorkflow("reply_later"); return }
+            rlPopup.open()
+          }
+          onGoRequested: root.goWorkflow("reply_later")
+
+          Popup {
+            id: rlPopup
+            x: 0; y: -implicitHeight - Style.space(6)
+            width: Style.space(320)
+            implicitHeight: rlPopupCol.implicitHeight + Style.space(8)
+            padding: Style.space(4); modal: false; focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            background: Rectangle { radius: Style.cornerRadius; color: Color.popups.background; border.width: 1; border.color: Color.popups.border }
+            contentItem: Column {
+              id: rlPopupCol; spacing: Style.space(2)
+              Text {
+                leftPadding: Style.space(6); topPadding: Style.space(4); bottomPadding: Style.space(2)
+                text: "REPLY LATER (" + actionTray.rlCount + ")"
+                color: root.dim; font.family: root.fontFamily
+                font.pixelSize: Style.font.caption; font.bold: true
+              }
+              Repeater {
+                model: root.service ? root.service.replyLaterPreview : []
+                PilePreviewRow {
+                  required property var modelData
+                  required property int index
+                  subject: modelData.subject || ""
+                  senderName: modelData.from ? modelData.from.display : ""
+                  senderEmail: modelData.from ? modelData.from.email : ""
+                  avatarHue: actionTray._avatarHue(senderEmail)
+                  onActivated: { rlPopup.close(); root.openMessage(modelData.id) }
+                }
+              }
+              Text {
+                visible: actionTray.rlCount > 4
+                leftPadding: Style.space(6); topPadding: Style.space(4)
+                text: "+ " + (actionTray.rlCount - 4) + " more\u2026"
+                color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+              }
+              Rectangle {
+                width: parent.width; implicitHeight: Style.space(32)
+                color: "transparent"; radius: Style.cornerRadius
+                Text {
+                  anchors.centerIn: parent
+                  text: "Go to Focus & Reply\u2026"
+                  color: root.accent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+                }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: { rlPopup.close(); root.goWorkflow("reply_later") } }
+              }
+            }
+          }
+        }
+
+        PileCard {
+          id: saCard
+          visible: actionTray.saCount > 0
+          icon: "\u{1F4CC}"
+          pileLabel: "Set Aside"
+          count: actionTray.saCount
+          preview: root.service ? root.service.setAsidePreview : []
+          goLabel: "Go to Set Aside\u2026"
+          onActivated: {
+            if (count <= 1) { root.goWorkflow("set_aside"); return }
+            saPopup.open()
+          }
+          onGoRequested: root.goWorkflow("set_aside")
+
+          Popup {
+            id: saPopup
+            x: 0; y: -implicitHeight - Style.space(6)
+            width: Style.space(320)
+            implicitHeight: saPopupCol.implicitHeight + Style.space(8)
+            padding: Style.space(4); modal: false; focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            background: Rectangle { radius: Style.cornerRadius; color: Color.popups.background; border.width: 1; border.color: Color.popups.border }
+            contentItem: Column {
+              id: saPopupCol; spacing: Style.space(2)
+              Text {
+                leftPadding: Style.space(6); topPadding: Style.space(4); bottomPadding: Style.space(2)
+                text: "SET ASIDE (" + actionTray.saCount + ")"
+                color: root.dim; font.family: root.fontFamily
+                font.pixelSize: Style.font.caption; font.bold: true
+              }
+              Repeater {
+                model: root.service ? root.service.setAsidePreview : []
+                PilePreviewRow {
+                  required property var modelData
+                  required property int index
+                  subject: modelData.subject || ""
+                  senderName: modelData.from ? modelData.from.display : ""
+                  senderEmail: modelData.from ? modelData.from.email : ""
+                  avatarHue: actionTray._avatarHue(senderEmail)
+                  onActivated: { saPopup.close(); root.openMessage(modelData.id) }
+                }
+              }
+              Text {
+                visible: actionTray.saCount > 4
+                leftPadding: Style.space(6); topPadding: Style.space(4)
+                text: "+ " + (actionTray.saCount - 4) + " more\u2026"
+                color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+              }
+              Rectangle {
+                width: parent.width; implicitHeight: Style.space(32)
+                color: "transparent"; radius: Style.cornerRadius
+                Text {
+                  anchors.centerIn: parent
+                  text: "Go to Set Aside\u2026"
+                  color: root.accent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+                }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: { saPopup.close(); root.goWorkflow("set_aside") } }
+              }
+            }
+          }
+        }
+      }
+
+      component PileCard: Rectangle {
+        id: pc
+        property string icon; property string pileLabel
+        property int count: 0
+        property var preview: []
+        property string goLabel: ""
+        signal activated()
+        signal goRequested()
+
+        readonly property string _firstSender: preview.length > 0 && preview[0].from
+          ? preview[0].from.display : ""
+        readonly property string _firstEmail: preview.length > 0 && preview[0].from
+          ? preview[0].from.email : ""
+        readonly property string _firstSubject: preview.length > 0
+          ? (preview[0].subject || pileLabel) : pileLabel
+
+        function _hue(email) {
+          var s = email || ""; var h = 0
+          for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360
+          return h / 360
+        }
+
+        width: pcRow.implicitWidth + Style.space(20)
+        height: Style.space(44); radius: Style.cornerRadius
+        color: pcHover.hovered ? Color.popups.background
+          : Qt.rgba(Color.popups.background.r, Color.popups.background.g,
+            Color.popups.background.b, 0.85)
+        border.width: 1; border.color: Color.popups.border
+        Row {
+          id: pcRow; anchors.centerIn: parent; spacing: Style.space(8)
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: pc.icon; font.pixelSize: Style.font.bodySmall
+          }
+          Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(26); height: Style.space(26); radius: Style.space(13)
+            color: Qt.hsla(pc._hue(pc._firstEmail), 0.50, 0.42, 1.0)
+            Text {
+              anchors.centerIn: parent
+              text: pc._firstSender.length > 0
+                ? pc._firstSender.charAt(0).toUpperCase() : "?"
+              color: Qt.rgba(1, 1, 1, 1); font.family: root.fontFamily
+              font.pixelSize: Style.font.caption; font.bold: true
+            }
+          }
+          Column {
+            anchors.verticalCenter: parent.verticalCenter; spacing: 0
+            Text {
+              text: pc._firstSubject; textFormat: Text.PlainText
+              color: root.foreground; font.family: root.fontFamily
+              font.pixelSize: Style.font.caption; elide: Text.ElideRight
+              width: Math.min(implicitWidth, Style.space(160))
+            }
+            Text {
+              text: pc._firstSender; textFormat: Text.PlainText
+              color: root.dim; font.family: root.fontFamily
+              font.pixelSize: Style.font.caption; elide: Text.ElideRight
+              width: Math.min(implicitWidth, Style.space(160))
+            }
+          }
+          Rectangle {
+            visible: pc.count > 1; anchors.verticalCenter: parent.verticalCenter
+            width: pcCountText.implicitWidth + Style.space(8)
+            height: Style.space(18); radius: Style.space(9)
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+            Text {
+              id: pcCountText; anchors.centerIn: parent
+              text: String(pc.count); color: root.dim
+              font.family: root.fontFamily; font.pixelSize: Style.font.caption
+            }
+          }
+        }
+        HoverHandler { id: pcHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: pc.activated() }
+      }
+
+      component PilePreviewRow: Rectangle {
+        id: ppr
+        property string subject; property string senderName
+        property string senderEmail; property real avatarHue: 0
+        signal activated()
+        width: parent ? parent.width : 0
+        implicitHeight: Style.space(48); radius: Style.cornerRadius
+        color: pprHover.hovered
+          ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+          : "transparent"
+        Row {
+          anchors.left: parent.left; anchors.leftMargin: Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter; spacing: Style.space(8)
+          Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(30); height: Style.space(30); radius: Style.space(15)
+            color: Qt.hsla(ppr.avatarHue, 0.50, 0.42, 1.0)
+            Text {
+              anchors.centerIn: parent
+              text: ppr.senderName.length > 0
+                ? ppr.senderName.charAt(0).toUpperCase() : "?"
+              color: Qt.rgba(1, 1, 1, 1); font.family: root.fontFamily
+              font.pixelSize: Style.font.caption; font.bold: true
+            }
+          }
+          Column {
+            anchors.verticalCenter: parent.verticalCenter; spacing: Style.space(1)
+            Text {
+              text: ppr.subject; textFormat: Text.PlainText; color: root.foreground
+              font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+              elide: Text.ElideRight
+              width: Math.min(implicitWidth, Style.space(240))
+            }
+            Text {
+              text: ppr.senderName; textFormat: Text.PlainText; color: root.dim
+              font.family: root.fontFamily; font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              width: Math.min(implicitWidth, Style.space(240))
+            }
+          }
+        }
+        HoverHandler { id: pprHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: ppr.activated() }
+      }
+
+      // ── Bubble Up menu (list view) ─────────────────────────────────────
+
+      Popup {
+        id: bubbleMenu
+        x: Math.round((parent.width - width) / 2)
+        y: actionTray.y - implicitHeight - Style.space(6)
+        width: Style.space(240)
+        implicitHeight: bubbleCol.implicitHeight + Style.space(8)
+        padding: Style.space(4); modal: false; focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { radius: Style.cornerRadius; color: Color.popups.background; border.width: 1; border.color: Color.popups.border }
+        function scheduleBubble(ms) { var id = root.cursorId; if (!root.service || id === "") return; root.service.scheduleWorkflowBubble(id, new Date(Date.now() + ms)); bubbleMenu.close() }
+        function bubbleNow() { var id = root.cursorId; if (!root.service || id === "") return; root.service.scheduleWorkflowBubble(id, new Date()); bubbleMenu.close() }
+        function nextWeekday(dayOfWeek, hour) { var d = new Date(); d.setHours(hour, 0, 0, 0); var diff = (dayOfWeek - d.getDay() + 7) % 7; if (diff === 0) diff = 7; d.setDate(d.getDate() + diff); return d }
+        function timeLabel(ms) { var d = new Date(Date.now() + ms); var days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]; return days[d.getDay()] + ", " + d.getHours() + (d.getMinutes() === 0 ? "" : ":" + ("0" + d.getMinutes()).slice(-2)) + (d.getHours() < 12 ? "am" : "pm") }
+        function dateLabelFor(d) { var days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]; return days[d.getDay()] + ", " + d.getHours() + (d.getMinutes() === 0 ? "" : ":" + ("0" + d.getMinutes()).slice(-2)) + (d.getHours() < 12 ? "am" : "pm") }
+        contentItem: Column {
+          id: bubbleCol; spacing: Style.space(2)
+          Text { leftPadding: Style.space(9); topPadding: Style.space(4); bottomPadding: Style.space(4); text: "BUBBLE THIS UP\u2026"; textFormat: Text.PlainText; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+          BubbleRow { label: "Now"; hint: ""; onActivated: bubbleMenu.bubbleNow() }
+          BubbleRow { label: "Later today"; hint: bubbleMenu.timeLabel(4 * 3600000); onActivated: bubbleMenu.scheduleBubble(4 * 3600000) }
+          BubbleRow { label: "Tomorrow"; hint: bubbleMenu.timeLabel(24 * 3600000); onActivated: bubbleMenu.scheduleBubble(24 * 3600000) }
+          BubbleRow { property var sat: bubbleMenu.nextWeekday(6, 8); label: "This weekend"; hint: bubbleMenu.dateLabelFor(sat); onActivated: { var id = root.cursorId; if (!root.service || id === "") return; root.service.scheduleWorkflowBubble(id, sat); bubbleMenu.close() } }
+          BubbleRow { property var mon: bubbleMenu.nextWeekday(1, 8); label: "Next week"; hint: bubbleMenu.dateLabelFor(mon); onActivated: { var id = root.cursorId; if (!root.service || id === "") return; root.service.scheduleWorkflowBubble(id, mon); bubbleMenu.close() } }
+          BubbleRow { label: "Surprise me"; hint: "\u{1F3B2}"; onActivated: { var ms = 3600000 + Math.floor(Math.random() * 6 * 86400000); bubbleMenu.scheduleBubble(ms) } }
+          Item { width: parent.width; implicitHeight: Style.space(7); PanelSeparator { anchors.verticalCenter: parent.verticalCenter; width: parent.width; foreground: root.foreground } }
+          BubbleRow { label: "Pick a date\u2026"; hint: ""; onActivated: { bubbleMenu.close(); appBubbleDatePicker.open() } }
+        }
+      }
+
+      Popup {
+        id: appBubbleDatePicker
+        x: Math.round((parent.width - width) / 2)
+        y: actionTray.y - implicitHeight - Style.space(6)
+        width: Style.space(260)
+        implicitHeight: appDateCol.implicitHeight + Style.space(8)
+        padding: Style.space(4); modal: false; focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { radius: Style.cornerRadius; color: Color.popups.background; border.width: 1; border.color: Color.popups.border }
+        contentItem: Column {
+          id: appDateCol; spacing: Style.space(6)
+          Text { leftPadding: Style.space(9); topPadding: Style.space(4); text: "PICK A DATE & TIME"; textFormat: Text.PlainText; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+          Row {
+            anchors.horizontalCenter: parent.horizontalCenter; spacing: Style.space(6)
+            TextField {
+              id: appDateField
+              width: Style.space(120)
+              placeholderText: "YYYY-MM-DD"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              color: root.foreground
+              placeholderTextColor: root.dim
+              background: Rectangle {
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.foreground.r, root.foreground.g,
+                  root.foreground.b, 0.06)
+                border.width: 1
+                border.color: Qt.rgba(root.foreground.r, root.foreground.g,
+                  root.foreground.b, 0.15)
+              }
+              Component.onCompleted: {
+                var d = new Date(Date.now() + 86400000)
+                text = d.getFullYear() + "-"
+                  + String(d.getMonth() + 1).padStart(2, "0") + "-"
+                  + String(d.getDate()).padStart(2, "0")
+              }
+            }
+            TextField {
+              id: appTimeField
+              width: Style.space(80)
+              placeholderText: "HH:MM"
+              text: "09:00"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              color: root.foreground
+              placeholderTextColor: root.dim
+              background: Rectangle {
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.foreground.r, root.foreground.g,
+                  root.foreground.b, 0.06)
+                border.width: 1
+                border.color: Qt.rgba(root.foreground.r, root.foreground.g,
+                  root.foreground.b, 0.15)
+              }
+            }
+          }
+          Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter; width: appSchedLabel.implicitWidth + Style.space(24); height: Style.space(30); radius: Style.cornerRadius
+            color: appSchedHover.hovered ? root.accent : Qt.darker(root.accent, 1.15)
+            Text { id: appSchedLabel; anchors.centerIn: parent; text: "Schedule"; textFormat: Text.PlainText; color: Qt.rgba(1,1,1,1); font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+            HoverHandler { id: appSchedHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: { var parts = appDateField.text.split("-"); var time = appTimeField.text.split(":"); if (parts.length < 3 || time.length < 2) return; var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), parseInt(time[0]), parseInt(time[1]), 0, 0); if (isNaN(d.getTime())) return; var id = root.cursorId; if (!root.service || id === "") return; root.service.scheduleWorkflowBubble(id, d); appBubbleDatePicker.close() } }
+          }
+          Item { width: 1; implicitHeight: Style.space(2) }
+        }
+      }
+
+      component BubbleRow: Rectangle {
+        id: bRow; required property string label; required property string hint; signal activated()
+        width: bubbleMenu.width - bubbleMenu.leftPadding - bubbleMenu.rightPadding
+        implicitHeight: Style.spacing.popupRowHeight; radius: Style.cornerRadius
+        color: bHover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
+        Text { anchors.left: parent.left; anchors.leftMargin: Style.space(9); anchors.verticalCenter: parent.verticalCenter; text: bRow.label; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+        Text { anchors.right: parent.right; anchors.rightMargin: Style.space(9); anchors.verticalCenter: parent.verticalCenter; visible: bRow.hint !== ""; text: bRow.hint; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+        HoverHandler { id: bHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: bRow.activated() }
+      }
+
+      // ── Bulk actions bar (multi-select) ──────────────────────────────
+      Rectangle {
+        id: bulkBar
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: statusBar.top; anchors.bottomMargin: Style.space(10)
+        visible: root.multiSelectActive && root.currentView === "list" && !root.showPage && !root.composing
+        z: 15
+        width: bulkBarContent.implicitWidth + Style.space(16)
+        height: bulkBarContent.implicitHeight + Style.space(12)
+        radius: Style.space(12)
+        color: Color.popups.background; border.width: 1; border.color: Color.popups.border
+        Column {
+          id: bulkBarContent; anchors.centerIn: parent; spacing: Style.space(4)
+          Text { anchors.horizontalCenter: parent.horizontalCenter; text: root.selectedCount + " selected"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+          Row { spacing: Style.space(4)
+            BulkButton { label: "Reply Later"; shortcut: "L"; onActivated: { root.bulkAct(function(id) { root.service.setWorkflowPile(id, "reply_later") }) } }
+            BulkButton { label: "Set Aside"; shortcut: "A"; onActivated: { root.bulkAct(function(id) { root.service.setWorkflowPile(id, "set_aside") }) } }
+            BulkButton { label: "Mark Seen"; shortcut: "E"; onActivated: { root.bulkAct(function(id) { root.service.markWorkflowSeen(id, true) }) } }
+          }
+          Row { spacing: Style.space(4)
+            BulkButton { label: "To Feed"; shortcut: "D"; onActivated: { root.bulkAct(function(id) { root.service.moveThread(id, "feed") }) } }
+            BulkButton { label: "Paper Trail"; shortcut: "P"; onActivated: { root.bulkAct(function(id) { root.service.moveThread(id, "paper_trail") }) } }
+            BulkButton { label: "Bubble Up"; shortcut: "Z"; onActivated: bulkBubbleMenu.open() }
+            BulkButton { label: "Read Together"; shortcut: "O"; onActivated: root.startReadTogether() }
+          }
+          Item { width: parent.width; implicitHeight: Style.space(5); PanelSeparator { anchors.verticalCenter: parent.verticalCenter; width: parent.width; foreground: root.foreground } }
+          Row { spacing: Style.space(4)
+            BulkButton { label: "Star"; shortcut: "S"; onActivated: { root.bulkAct(function(id) { root.service.toggleStar(id) }) } }
+            BulkButton { label: "Archive"; onActivated: { root.bulkAct(function(id) { root.service.act(id, "archive") }) } }
+            BulkButton { label: "Label\u2026"; shortcut: "B"; onActivated: { var ids = Object.keys(root.selectedIds); labelPicker.openForBulk(ids) } }
+            BulkButton { label: "Ignore"; onActivated: { root.bulkAct(function(id) { root.service.ignoreThread(id) }) } }
+            BulkButton { label: "Trash"; shortcut: "T"; tone: root.urgent; onActivated: { root.bulkAct(function(id) { root.service.act(id, "trash") }) } }
+          }
+        }
+        Rectangle {
+          anchors.right: parent.right; anchors.top: parent.top
+          anchors.rightMargin: Style.space(6); anchors.topMargin: Style.space(6)
+          width: Style.space(24); height: Style.space(24); radius: width / 2
+          color: bulkCloseHover.hovered
+            ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.15)
+            : "transparent"
+          Text {
+            anchors.centerIn: parent; text: "\u2715"
+            color: root.dim; font.pixelSize: Style.font.body
+          }
+          HoverHandler { id: bulkCloseHover; cursorShape: Qt.PointingHandCursor }
+          TapHandler { onTapped: root.clearSelection() }
+        }
+      }
+
+      Popup {
+        id: bulkBubbleMenu
+        x: Math.round((parent.width - width) / 2); y: bulkBar.y - implicitHeight - Style.space(4)
+        width: Style.space(240); implicitHeight: bbCol.implicitHeight + Style.space(8); padding: Style.space(4); modal: false; focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { radius: Style.cornerRadius; color: Color.popups.background; border.width: 1; border.color: Color.popups.border }
+        function scheduleAll(ms) { var at = new Date(Date.now() + ms); root.bulkAct(function(id) { root.service.scheduleWorkflowBubble(id, at) }); bulkBubbleMenu.close() }
+        contentItem: Column {
+          id: bbCol; spacing: Style.space(2)
+          Text { leftPadding: Style.space(9); topPadding: Style.space(4); bottomPadding: Style.space(4); text: "BUBBLE ALL UP\u2026"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+          BubbleRow { label: "Now"; hint: ""; onActivated: bulkBubbleMenu.scheduleAll(0) }
+          BubbleRow { label: "Later today"; hint: bubbleMenu.timeLabel(4 * 3600000); onActivated: bulkBubbleMenu.scheduleAll(4 * 3600000) }
+          BubbleRow { label: "Tomorrow"; hint: bubbleMenu.timeLabel(24 * 3600000); onActivated: bulkBubbleMenu.scheduleAll(24 * 3600000) }
+          BubbleRow { property var sat: bubbleMenu.nextWeekday(6, 8); label: "This weekend"; hint: bubbleMenu.dateLabelFor(sat); onActivated: { var at = sat; root.bulkAct(function(id) { root.service.scheduleWorkflowBubble(id, at) }); bulkBubbleMenu.close() } }
+          BubbleRow { property var mon: bubbleMenu.nextWeekday(1, 8); label: "Next week"; hint: bubbleMenu.dateLabelFor(mon); onActivated: { var at = mon; root.bulkAct(function(id) { root.service.scheduleWorkflowBubble(id, at) }); bulkBubbleMenu.close() } }
+        }
+      }
+
+      component BulkButton: Rectangle {
+        id: bb; property string label; property string shortcut: ""; property color tone: root.foreground; signal activated()
+        width: Math.max(bbLabel.implicitWidth + Style.space(16), Style.space(80)); height: Style.space(38); radius: Style.cornerRadius
+        color: bbHover.hovered ? Style.hoverFillFor(root.foreground, root.accent) : Style.normalFillFor(root.foreground, root.accent)
+        Column { anchors.centerIn: parent; spacing: Style.space(1)
+          Text { id: bbLabel; anchors.horizontalCenter: parent.horizontalCenter; text: bb.label; color: bb.tone; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+          Text { visible: bb.shortcut !== ""; anchors.horizontalCenter: parent.horizontalCenter; text: bb.shortcut; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+        }
+        HoverHandler { id: bbHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: bb.activated() }
+      }
+
+      // ── Quick actions popup (avatar click / . key) ─────────────────────
+
+      Item {
+        id: quickActions; anchors.fill: parent; z: 55; visible: qaMenu.opened
+        property string messageId: ""
+        function openAt(id, sceneX, sceneY) {
+          quickActions.messageId = String(id || ""); if (!root.service) return
+          var local = quickActions.mapFromGlobal(sceneX, sceneY)
+          qaMenu.x = Math.max(0, Math.min(local.x - qaMenu.width / 2, quickActions.width - qaMenu.width))
+          qaMenu.y = local.y + qaMenu.implicitHeight > quickActions.height ? Math.max(0, local.y - qaMenu.implicitHeight) : local.y
+          qaMenu.open()
+        }
+        function close() { qaMenu.close() }
+        function run(action) { var id = quickActions.messageId; qaMenu.close(); if (!root.service || id === "") return; root.cursorId = id; root.actOnCursor(action) }
+
+        Popup {
+          id: qaMenu; width: Style.space(280); implicitHeight: qaCol.implicitHeight + Style.space(8); padding: Style.space(4); modal: false; focus: true
+          closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+          background: Rectangle { radius: Style.cornerRadius; color: Color.popups.background; border.width: 1; border.color: Color.popups.border }
+          contentItem: Column {
+            id: qaCol; spacing: Style.space(2)
+            Row { width: parent.width; spacing: Style.space(4)
+              QaButton { width: (parent.width - Style.space(8)) / 3; label: "Reply Later"; shortcut: "L"; onActivated: { qaMenu.close(); if (root.service) root.service.setWorkflowPile(quickActions.messageId, "reply_later") } }
+              QaButton { width: (parent.width - Style.space(8)) / 3; label: "Set Aside"; shortcut: "A"; onActivated: { qaMenu.close(); if (root.service) root.service.setWorkflowPile(quickActions.messageId, "set_aside") } }
+              QaButton { width: (parent.width - Style.space(8)) / 3; label: "Mark Seen"; shortcut: "E"; onActivated: { qaMenu.close(); if (root.service) root.service.markWorkflowSeen(quickActions.messageId, true) } }
+            }
+            Row { width: parent.width; spacing: Style.space(4)
+              QaButton { width: (parent.width - Style.space(8)) / 3; label: "To Feed"; shortcut: "D"; onActivated: { qaMenu.close(); if (root.service) root.service.moveThread(quickActions.messageId, "feed") } }
+              QaButton { width: (parent.width - Style.space(8)) / 3; label: "Paper Trail"; shortcut: "P"; onActivated: { qaMenu.close(); if (root.service) root.service.moveThread(quickActions.messageId, "paper_trail") } }
+              QaButton { width: (parent.width - Style.space(8)) / 3; label: "Forward"; shortcut: "F"; onActivated: { qaMenu.close(); root.openMessage(quickActions.messageId); root.startCompose("forward") } }
+            }
+            Item { width: parent.width; implicitHeight: Style.space(7); PanelSeparator { anchors.verticalCenter: parent.verticalCenter; width: parent.width; foreground: root.foreground } }
+            QaRow { visible: !!root.service && root.service.workflowEnabled; text: "Route sender to Imbox"; onActivated: { qaMenu.close(); if (root.service) root.service.routeSender(quickActions.messageId, "inbox") } }
+            QaRow { visible: !!root.service && root.service.workflowEnabled; text: "Route sender to Feed"; onActivated: { qaMenu.close(); if (root.service) root.service.routeSender(quickActions.messageId, "feed") } }
+            QaRow { visible: !!root.service && root.service.workflowEnabled; text: "Route sender to Paper Trail"; onActivated: { qaMenu.close(); if (root.service) root.service.routeSender(quickActions.messageId, "paper_trail") } }
+            Item { visible: !!root.service && root.service.workflowEnabled; width: parent.width; implicitHeight: Style.space(7); PanelSeparator { anchors.verticalCenter: parent.verticalCenter; width: parent.width; foreground: root.foreground } }
+            QaRow { text: "Reply"; shortcut: "R"; onActivated: { qaMenu.close(); root.openMessage(quickActions.messageId); Qt.callLater(function() { reader.focusReply() }) } }
+            QaRow { text: "Bubble Up"; shortcut: "Z"; onActivated: { qaMenu.close(); root.cursorId = quickActions.messageId; bubbleMenu.open() } }
+            QaRow { text: "Star"; shortcut: "S"; onActivated: { qaMenu.close(); if (root.service) root.service.toggleStar(quickActions.messageId) } }
+            QaRow { text: "Archive"; onActivated: quickActions.run("archive") }
+            QaRow { text: "Label\u2026"; shortcut: "B"; onActivated: { qaMenu.close(); labelPicker.openFor(quickActions.messageId) } }
+            QaRow { visible: !!root.service && root.service.workflowEnabled; text: "Ignore thread"; onActivated: { qaMenu.close(); if (root.service) root.service.ignoreThread(quickActions.messageId) } }
+            QaRow { text: "Trash"; shortcut: "T"; tone: root.urgent; onActivated: quickActions.run("trash") }
+            QaRow { text: "Open in browser"; tone: root.dim; onActivated: { qaMenu.close(); if (root.service) root.service.openInBrowser(quickActions.messageId) } }
+          }
+        }
+
+        component QaButton: Rectangle {
+          id: qab; property string label; property string shortcut: ""; signal activated()
+          height: Style.space(36); radius: Style.cornerRadius
+          color: qabHover.hovered ? Style.hoverFillFor(root.foreground, root.accent) : Style.normalFillFor(root.foreground, root.accent)
+          Column { anchors.centerIn: parent; spacing: Style.space(1)
+            Text { anchors.horizontalCenter: parent.horizontalCenter; text: qab.label; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            Text { visible: qab.shortcut !== ""; anchors.horizontalCenter: parent.horizontalCenter; text: qab.shortcut; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+          }
+          HoverHandler { id: qabHover; cursorShape: Qt.PointingHandCursor }
+          TapHandler { onTapped: qab.activated() }
+        }
+
+        component QaRow: Rectangle {
+          id: qar; property string text; property string shortcut: ""; property color tone: root.foreground; signal activated()
+          width: parent ? parent.width : 0; implicitHeight: Style.spacing.popupRowHeight; radius: Style.cornerRadius
+          color: qarHover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
+          Text { anchors.left: parent.left; anchors.leftMargin: Style.space(9); anchors.verticalCenter: parent.verticalCenter; text: qar.text; color: qar.tone; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+          Text { anchors.right: parent.right; anchors.rightMargin: Style.space(9); anchors.verticalCenter: parent.verticalCenter; visible: qar.shortcut !== ""; text: qar.shortcut; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+          HoverHandler { id: qarHover; cursorShape: Qt.PointingHandCursor }
+          TapHandler { onTapped: qar.activated() }
+        }
+      }
+
+      // ── Label picker popup ─────────────────────────────────────────────
+
+      Popup {
+        id: labelPicker; property string targetId: ""; property var targetIds: []; property bool bulk: false; property string filter: ""
+        function openFor(id) { targetId = String(id || ""); targetIds = []; bulk = false; filter = ""; labelFilterField.text = ""; open() }
+        function openForBulk(ids) { targetId = ""; targetIds = ids; bulk = true; filter = ""; labelFilterField.text = ""; open() }
+        readonly property var filteredLabels: { if (!root.service) return []; var all = root.service.userLabels; var f = filter.toLowerCase(); if (f === "") return all; var result = []; for (var i = 0; i < all.length; i++) { if (all[i].name.toLowerCase().indexOf(f) >= 0) result.push(all[i]) }; return result }
+        x: Math.round((parent.width - width) / 2); y: Math.round((parent.height - height) / 2)
+        width: Style.space(280); implicitHeight: Math.min(labelPickerCol.implicitHeight + Style.space(8), parent.height * 0.6)
+        padding: Style.space(4); modal: true; focus: true; closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside; z: 50
+        background: Rectangle { radius: Style.cornerRadius; color: Color.popups.background; border.width: 1; border.color: Color.popups.border }
+        contentItem: Column {
+          id: labelPickerCol; spacing: Style.space(4)
+          Text { leftPadding: Style.space(6); topPadding: Style.space(4); text: "APPLY LABEL"; textFormat: Text.PlainText; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+          TextField { id: labelFilterField; width: parent.width; placeholderText: "Filter labels\u2026"; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; color: root.foreground; placeholderTextColor: root.dim; onTextChanged: labelPicker.filter = text; background: Rectangle { radius: Style.cornerRadius; color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06); border.width: 1; border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.15) } }
+          Flickable {
+            width: parent.width; height: Math.min(labelListCol.implicitHeight, labelPicker.height - Style.space(80)); contentHeight: labelListCol.implicitHeight; clip: true; boundsBehavior: Flickable.StopAtBounds; ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            Column { id: labelListCol; width: parent.width; spacing: Style.space(2)
+              Repeater { model: labelPicker.filteredLabels
+                Rectangle { required property var modelData; required property int index; width: labelListCol.width; implicitHeight: Style.spacing.popupRowHeight; radius: Style.cornerRadius; color: lblHover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
+                  Text { anchors.left: parent.left; anchors.leftMargin: Style.space(9); anchors.verticalCenter: parent.verticalCenter; text: modelData.name; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                  HoverHandler { id: lblHover; cursorShape: Qt.PointingHandCursor }
+                  TapHandler { onTapped: { var lid = modelData.id; if (labelPicker.bulk) { var ids = labelPicker.targetIds; for (var i = 0; i < ids.length; i++) root.service.applyLabel(ids[i], lid) } else { root.service.applyLabel(labelPicker.targetId, lid) }; labelPicker.close() } }
+                }
+              }
+              Text { visible: labelPicker.filteredLabels.length === 0; leftPadding: Style.space(9); topPadding: Style.space(8); bottomPadding: Style.space(8); text: "No labels found"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
             }
           }
         }
@@ -1061,6 +1737,10 @@ Item {
 
       Keys.onEscapePressed: function(event) {
         if (root.shortcutHelpVisible) root.shortcutHelpVisible = false
+        else if (labelPicker.opened) labelPicker.close()
+        else if (qaMenu.opened) quickActions.close()
+        else if (bulkBubbleMenu.opened) bulkBubbleMenu.close()
+        else if (root.multiSelectActive) root.clearSelection()
         else if (rowMenu.opened) rowMenu.close()
         else if (mailboxMore.opened) mailboxMore.close()
         else if (appMenu.opened) appMenu.close()
@@ -1163,6 +1843,17 @@ Item {
           else if (root.showingFeed) { root.goWorkflow("inbox") }
         }
       }
+      Shortcut {
+        sequence: "x"
+        enabled: !focusScope.typing && root.currentView === "list" && root.cursorId !== ""
+        onActivated: root.toggleSelect(root.cursorId)
+      }
+      Shortcut {
+        sequence: "."
+        enabled: !focusScope.typing && root.currentView === "list"
+          && root.cursorId !== "" && !!root.service && root.service.workflowEnabled
+        onActivated: quickActions.openAt(root.cursorId, window.width / 2, window.height / 2)
+      }
       Shortcut { sequence: "e"; enabled: !focusScope.typing; onActivated: root.actOnCursor("archive") }
       Shortcut { sequence: "d"; enabled: !focusScope.typing; onActivated: root.actOnCursor("trash") }
       Shortcut { sequence: "s"; enabled: !focusScope.typing; onActivated: if (root.service) root.service.toggleStar(root.cursorId) }
@@ -1171,6 +1862,17 @@ Item {
       Shortcut { sequence: "r"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: reader.focusReply() }
       Shortcut { sequence: "a"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("replyAll") }
       Shortcut { sequence: "f"; enabled: !focusScope.typing && root.currentView === "reader"; onActivated: root.startCompose("forward") }
+      Shortcut {
+        sequence: "Shift+N"
+        enabled: !focusScope.typing && root.readingTogether
+        onActivated: root.nextReadTogether()
+      }
+      Shortcut {
+        sequence: "b"
+        enabled: !focusScope.typing && root.currentView === "list"
+          && root.cursorId !== "" && !!root.service
+        onActivated: labelPicker.openFor(root.cursorId)
+      }
       Shortcut { sequence: "c"; enabled: !focusScope.typing; onActivated: root.startCompose("new") }
       Shortcut {
         sequence: "h"
@@ -1232,7 +1934,8 @@ Item {
       Shortcut {
         sequence: "z"
         enabled: !focusScope.typing && !!root.service && root.service.workflowEnabled
-        onActivated: root.bubbleCursor()
+          && root.currentView === "list" && root.cursorId !== ""
+        onActivated: bubbleMenu.open()
       }
       Shortcut { sequence: "g,i"; enabled: !focusScope.typing; onActivated: root.goMailbox("inbox") }
       Shortcut { sequence: "g,s"; enabled: !focusScope.typing; onActivated: root.goMailbox("starred") }

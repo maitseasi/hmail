@@ -151,7 +151,7 @@ Item {
 
     // ── Non-screener: pile and bubble actions ────────────────────────────
     Flow {
-      visible: !root.screener
+      visible: !root.screener && root.service.workflowKey !== "inbox"
       width: parent.width
       spacing: Style.space(5)
 

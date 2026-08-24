@@ -15,6 +15,7 @@ Rectangle {
   required property string panelFontFamily
   property bool hasCursor: false
   property bool selected: false
+  property bool checked: false
   property bool dense: false
   // In Screener the subject is the sender's email address; keep the prop
   // so callers need no changes.
@@ -25,6 +26,8 @@ Rectangle {
   signal archiveRequested()
   signal trashRequested()
   signal menuRequested(real sceneX, real sceneY)
+  signal quickActionsRequested(real sceneX, real sceneY)
+  signal selectToggled()
   signal hovered(bool isHovered)
 
   readonly property bool hot: mouse.containsMouse || hasCursor
@@ -70,6 +73,8 @@ Rectangle {
         root.menuRequested(scene.x, scene.y)
       } else if (event.button === Qt.MiddleButton) {
         root.archiveRequested()
+      } else if (event.modifiers & Qt.ShiftModifier) {
+        root.selectToggled()
       } else {
         root.activated()
       }
@@ -94,16 +99,27 @@ Rectangle {
       Rectangle {
         anchors.fill: parent
         radius: width / 2
-        color: root.avatarColor
+        color: root.checked ? root.accentColor
+          : (avatarHover.hovered ? Qt.lighter(root.avatarColor, 1.25)
+            : root.avatarColor)
 
         Text {
           anchors.centerIn: parent
-          text: root._initial(root.summary.from ? root.summary.from.display : "")
+          text: root.checked ? "\u2713"
+            : root._initial(root.summary.from ? root.summary.from.display : "")
           textFormat: Text.PlainText
           color: Qt.rgba(1, 1, 1, 1)
           font.family: root.panelFontFamily
           font.pixelSize: Style.font.bodySmall
           font.bold: true
+        }
+
+        HoverHandler { id: avatarHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler {
+          onTapped: root.checked
+            ? root.selectToggled()
+            : root.quickActionsRequested(root.mapToGlobal(0, root.height / 2).x,
+                root.mapToGlobal(0, root.height / 2).y)
         }
       }
 

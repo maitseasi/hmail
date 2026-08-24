@@ -111,6 +111,10 @@ Item {
   readonly property var workflowSeenMessages: Workflow.messagesForView(
     workflowStore.store, messages, "previously_seen")
   readonly property var workflowSenderRules: Workflow.senderRuleList(workflowStore.store)
+  readonly property var replyLaterPreview: Workflow.messagesForView(
+    workflowStore.store, messages, "reply_later").slice(0, 4)
+  readonly property var setAsidePreview: Workflow.messagesForView(
+    workflowStore.store, messages, "set_aside").slice(0, 4)
   readonly property var workflowCounts: ({
     screener: Workflow.messagesForView(
       workflowStore.store, screenerSourceMessages, "screener").length,
@@ -1455,6 +1459,32 @@ Item {
 
   function openInBrowser(id) {
     Quickshell.execDetached(["xdg-open", Api.webMessageUrl(id, 0)])
+  }
+
+  function getMessageRaw(id, callback) {
+    if (!ready || !gmail) return
+    gmail.getMessageRaw(id, callback)
+  }
+
+  function ignoreThread(id) {
+    if (!ready || !gmail) return
+    gmail.modifyThread(id, [], ["INBOX"], function() {})
+    var index = Model.indexById(messages, id)
+    if (index >= 0) {
+      var copy = messages.slice()
+      copy.splice(index, 1)
+      messages = copy
+    }
+  }
+
+  function applyLabel(id, labelId) {
+    if (!ready || !gmail) return
+    gmail.modifyThread(id, [labelId], [], function() {})
+  }
+
+  function removeLabel(id, labelId) {
+    if (!ready || !gmail) return
+    gmail.modifyThread(id, [], [labelId], function() {})
   }
 
   function openWebInbox() {

@@ -330,6 +330,19 @@ Item {
   readonly property var messages: current ? current.visibleMessages : []
   readonly property var allMessages: current ? current.messages : []
   readonly property var labels: current ? current.labels : []
+  readonly property var userLabels: {
+    var all = labels
+    var result = []
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].system) continue
+      if (String(all[i].rawName || "").indexOf("Oma/") === 0) continue
+      result.push(all[i])
+    }
+    result.sort(function(a, b) {
+      return a.name.localeCompare(b.name)
+    })
+    return result
+  }
   readonly property string mailboxKey: current ? current.mailboxKey : "inbox"
   readonly property string searchQuery: current ? current.searchQuery : ""
   readonly property bool workflowEnabled: !!current && current.workflowEnabled
@@ -351,6 +364,8 @@ Item {
   readonly property string workflowCloudLastSync: current
     ? current.workflowSync.lastSyncAt : ""
   readonly property var workflowSenderRules: current ? current.workflowSenderRules : []
+  readonly property var replyLaterPreview: current ? current.replyLaterPreview : []
+  readonly property var setAsidePreview: current ? current.setAsidePreview : []
   readonly property int historicalScreenerMonths:
     current ? current.historicalScreenerMonths : 0
   readonly property bool historicalScreenerScanning:
@@ -441,6 +456,10 @@ Item {
   function cancelSignIn() { if (current) current.cancelSignIn() }
   function signOut() { if (current) current.signOut() }
   function openInBrowser(id) { if (current) current.openInBrowser(id) }
+  function getMessageRaw(id, callback) { if (current) current.getMessageRaw(id, callback) }
+  function ignoreThread(id) { if (current) current.ignoreThread(id) }
+  function applyLabel(id, labelId) { if (current) current.applyLabel(id, labelId) }
+  function removeLabel(id, labelId) { if (current) current.removeLabel(id, labelId) }
   function openWebInbox() { if (current) current.openWebInbox() }
   function openCloudConsole() { if (current) current.openCloudConsole() }
   function openGmailApiPage() { if (current) current.openGmailApiPage() }

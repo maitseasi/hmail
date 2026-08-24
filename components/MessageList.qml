@@ -41,9 +41,13 @@ Column {
       ? labels[service.workflowKey] : "WORKFLOW"
   }
 
+  property var checkedIds: ({})
+
   signal messageActivated(string id)
   signal rowHovered(string id, bool isHovered)
   signal menuRequested(string id, real sceneX, real sceneY)
+  signal quickActionsRequested(string id, real sceneX, real sceneY)
+  signal selectToggled(string id)
   signal screenerRequested()
   signal powerThroughRequested()
 
@@ -203,13 +207,18 @@ Column {
         senderFirst: root.service.workflowEnabled && root.service.workflowKey === "screener"
         hasCursor: root.cursorId === entry.modelData.id
         selected: root.service.selectedId === entry.modelData.id
+        checked: !!root.checkedIds[entry.modelData.id]
         onActivated: root.messageActivated(entry.modelData.id)
+        onSelectToggled: root.selectToggled(entry.modelData.id)
         onStarToggled: root.service.toggleStar(entry.modelData.id)
         onArchiveRequested: root.service.act(entry.modelData.id, "archive")
         onTrashRequested: root.service.act(entry.modelData.id, "trash")
         onHovered: function(isHovered) { root.rowHovered(entry.modelData.id, isHovered) }
         onMenuRequested: function(sceneX, sceneY) {
           root.menuRequested(entry.modelData.id, sceneX, sceneY)
+        }
+        onQuickActionsRequested: function(sceneX, sceneY) {
+          root.quickActionsRequested(entry.modelData.id, sceneX, sceneY)
         }
       }
     }

@@ -147,6 +147,10 @@ function fullQuery() {
   return { format: "full" }
 }
 
+function rawQuery() {
+  return { format: "raw" }
+}
+
 function historyQuery(startHistoryId, pageToken) {
   return {
     startHistoryId: String(startHistoryId || ""),

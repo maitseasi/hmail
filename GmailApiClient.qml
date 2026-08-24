@@ -124,6 +124,14 @@ Item {
       })
   }
 
+  function getMessageRaw(id, callback) {
+    return request("GET", Api.messagePath(id), Api.rawQuery(), null,
+      function(status, payload, error) {
+        if (typeof callback !== "function") return
+        callback(error ? null : payload, error)
+      })
+  }
+
   function getThread(id, callback) {
     return request("GET", Api.threadPath(id), Api.fullQuery(), null,
       function(status, payload, error) {
