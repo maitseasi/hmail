@@ -34,6 +34,7 @@ Item {
   signal replyAllRequested()
   signal senderSearchRequested(string email)
   signal labelRequested()
+  signal collectionRequested()
 
   function revealMessage(index) {
     if (messages.length === 0) return
@@ -459,6 +460,10 @@ Item {
           onActivated: { moreMenu.close(); root.labelRequested() }
         }
         MoreRow {
+          text: "Collection\u2026"
+          onActivated: { moreMenu.close(); root.collectionRequested() }
+        }
+        MoreRow {
           text: "Archive"
           shortcut: "E"
           onActivated: { moreMenu.close(); root.actionRequested("archive") }
@@ -469,6 +474,14 @@ Item {
           onActivated: {
             moreMenu.close()
             if (root.service) root.service.ignoreThread(root.service.selectedId)
+          }
+        }
+        MoreRow {
+          text: "Report spam"
+          tone: Qt.rgba(1, 0.45, 0.4, 1)
+          onActivated: {
+            moreMenu.close()
+            if (root.service) root.service.reportSpam(root.service.selectedId)
           }
         }
         MoreRow {
@@ -868,7 +881,10 @@ Item {
       MoreRow {
         text: "Report spam"
         tone: Qt.rgba(1, 0.45, 0.4, 1)
-        onActivated: { msgMenu.close(); root.actionRequested("spam") }
+        onActivated: {
+          msgMenu.close()
+          if (root.service) root.service.reportSpam(root.service.selectedId)
+        }
       }
 
       Item {

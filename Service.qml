@@ -448,6 +448,12 @@ Item {
   function cancelHistoricalScreenerScan() {
     if (current) current.cancelHistoricalScreenerScan()
   }
+  function acceptAllScreener() {
+    if (!current) return
+    var msgs = current.visibleMessages
+    for (var i = 0; i < msgs.length; i++)
+      current.routeSender(msgs[i].id, "inbox")
+  }
   function act(id, action, quiet) { if (current) current.act(id, action, quiet) }
   function toggleStar(id) { if (current) current.toggleStar(id) }
   function markAllRead() { if (current) current.markAllRead() }
@@ -458,8 +464,13 @@ Item {
   function openInBrowser(id) { if (current) current.openInBrowser(id) }
   function getMessageRaw(id, callback) { if (current) current.getMessageRaw(id, callback) }
   function ignoreThread(id) { if (current) current.ignoreThread(id) }
+  function reportSpam(id) { if (current) current.reportSpam(id) }
   function applyLabel(id, labelId) { if (current) current.applyLabel(id, labelId) }
   function removeLabel(id, labelId) { if (current) current.removeLabel(id, labelId) }
+  readonly property var collectionLabels: current ? current.collectionLabels : []
+  function createCollection(name, callback) { if (current) current.createCollection(name, callback) }
+  function addToCollection(threadId, collectionLabelId) { if (current) current.addToCollection(threadId, collectionLabelId) }
+  function removeFromCollection(threadId, collectionLabelId) { if (current) current.removeFromCollection(threadId, collectionLabelId) }
   function openWebInbox() { if (current) current.openWebInbox() }
   function openCloudConsole() { if (current) current.openCloudConsole() }
   function openGmailApiPage() { if (current) current.openGmailApiPage() }

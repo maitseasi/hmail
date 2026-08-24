@@ -1477,6 +1477,17 @@ Item {
     }
   }
 
+  function reportSpam(id) {
+    if (!ready || !gmail) return
+    gmail.modifyThread(id, ["SPAM"], ["INBOX"], function() {})
+    var index = Model.indexById(messages, id)
+    if (index >= 0) {
+      var copy = messages.slice()
+      copy.splice(index, 1)
+      messages = copy
+    }
+  }
+
   function applyLabel(id, labelId) {
     if (!ready || !gmail) return
     gmail.modifyThread(id, [labelId], [], function() {})
@@ -1485,6 +1496,42 @@ Item {
   function removeLabel(id, labelId) {
     if (!ready || !gmail) return
     gmail.modifyThread(id, [], [labelId], function() {})
+  }
+
+  readonly property var collectionLabels: {
+    var all = labels
+    var result = []
+    var prefix = "Hmail/Collection/"
+    for (var i = 0; i < all.length; i++) {
+      var raw = String(all[i].rawName || "")
+      if (raw.indexOf(prefix) === 0) {
+        result.push({
+          id: all[i].id,
+          name: raw.substring(prefix.length),
+          rawName: raw
+        })
+      }
+    }
+    result.sort(function(a, b) { return a.name.localeCompare(b.name) })
+    return result
+  }
+
+  function createCollection(name, callback) {
+    if (!ready || !gmail) return
+    gmail.createLabel("Hmail/Collection/" + name, function(label, error) {
+      if (label) refreshLabels()
+      if (typeof callback === "function") callback(label, error)
+    })
+  }
+
+  function addToCollection(threadId, collectionLabelId) {
+    if (!ready || !gmail) return
+    gmail.modifyThread(threadId, [collectionLabelId], [], function() {})
+  }
+
+  function removeFromCollection(threadId, collectionLabelId) {
+    if (!ready || !gmail) return
+    gmail.modifyThread(threadId, [], [collectionLabelId], function() {})
   }
 
   function openWebInbox() {

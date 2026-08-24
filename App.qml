@@ -80,27 +80,45 @@ Item {
   property int readTogetherIndex: 0
   readonly property bool readingTogether: readTogetherQueue.length > 0
 
+  property bool replyTogetherMode: false
+
   function startReadTogether() {
     var ids = Object.keys(selectedIds)
     if (ids.length === 0) return
     clearSelection()
+    replyTogetherMode = false
     readTogetherQueue = ids
     readTogetherIndex = 0
     openMessage(ids[0])
+  }
+  function startReplyTogether() {
+    var ids = Object.keys(selectedIds)
+    if (ids.length === 0) return
+    clearSelection()
+    replyTogetherMode = true
+    readTogetherQueue = ids
+    readTogetherIndex = 0
+    openMessage(ids[0])
+    Qt.callLater(function() { reader.focusReply() })
   }
   function nextReadTogether() {
     if (readTogetherIndex + 1 >= readTogetherQueue.length) {
       readTogetherQueue = []
       readTogetherIndex = 0
+      replyTogetherMode = false
       backToList()
       return
     }
     readTogetherIndex++
     openMessage(readTogetherQueue[readTogetherIndex])
+    if (replyTogetherMode) {
+      Qt.callLater(function() { reader.focusReply() })
+    }
   }
   function exitReadTogether() {
     readTogetherQueue = []
     readTogetherIndex = 0
+    replyTogetherMode = false
   }
 
   // Kept across messages: somebody who wants plain text wants it for their
@@ -273,7 +291,12 @@ Item {
   Connections {
     target: root.service
     ignoreUnknownSignals: true
-    function onReplySent() { compose.finish() }
+    function onReplySent() {
+      compose.finish()
+      if (root.replyTogetherMode && root.readingTogether) {
+        Qt.callLater(function() { root.nextReadTogether() })
+      }
+    }
     // A new account has no mailbox yet, so the only useful place to be is the
     // page that gives it one.
     // A new mailbox appears as a row in Settings, waiting to be signed in.
@@ -575,6 +598,58 @@ Item {
             }
           }
 
+          Item {
+            anchors.fill: parent
+            visible: !!root.service && root.service.workflowEnabled
+              && root.service.workflowKey === "screener"
+              && root.service.listLoaded
+              && root.service.messages.length === 0
+            z: 5
+
+            Column {
+              anchors.centerIn: parent
+              spacing: Style.space(16)
+
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "\u2728"
+                font.pixelSize: Style.space(48)
+              }
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "You\u2019re all caught up!"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
+                font.bold: true
+              }
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "No first-time senders to screen."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+              Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: scrBackLabel.implicitWidth + Style.space(24)
+                height: Style.space(36)
+                radius: Style.cornerRadius
+                color: scrBackHover.hovered ? root.accent : Qt.darker(root.accent, 1.15)
+                Text {
+                  id: scrBackLabel
+                  anchors.centerIn: parent
+                  text: "Back to Imbox"
+                  color: Qt.rgba(1, 1, 1, 1)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                HoverHandler { id: scrBackHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: root.goWorkflow("inbox") }
+              }
+            }
+          }
+
         }
 
         FeedView {
@@ -727,6 +802,7 @@ Item {
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            visible: root.service && root.service.workflowNewMessages.length > 0
 
             Column {
               id: ptCol
@@ -753,17 +829,54 @@ Item {
                   onCardFocused: root.cursorId = modelData.id
                 }
               }
+            }
+          }
+
+          Item {
+            anchors.fill: parent
+            visible: !root.service || root.service.workflowNewMessages.length === 0
+            z: 5
+
+            Column {
+              anchors.centerIn: parent
+              spacing: Style.space(16)
 
               Text {
-                visible: !root.service
-                  || root.service.workflowNewMessages.length === 0
-                width: ptCol.width
-                horizontalAlignment: Text.AlignHCenter
-                text: "No new messages \u2014 you\u2019re all caught up!"
-                textFormat: Text.PlainText
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "\u2728"
+                font.pixelSize: Style.space(48)
+              }
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "You\u2019re all caught up!"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
+                font.bold: true
+              }
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "No new messages to power through."
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
+                font.pixelSize: Style.font.body
+              }
+              Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: ptBackLabel.implicitWidth + Style.space(24)
+                height: Style.space(36)
+                radius: Style.cornerRadius
+                color: ptBackHover.hovered ? root.accent : Qt.darker(root.accent, 1.15)
+                Text {
+                  id: ptBackLabel
+                  anchors.centerIn: parent
+                  text: "Back to Imbox"
+                  color: Qt.rgba(1, 1, 1, 1)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                HoverHandler { id: ptBackHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: root.powerThroughActive = false }
               }
             }
           }
@@ -798,6 +911,10 @@ Item {
             if (root.service && root.service.selectedId !== "")
               labelPicker.openFor(root.service.selectedId)
           }
+          onCollectionRequested: {
+            if (root.service && root.service.selectedId !== "")
+              collectionPicker.openFor(root.service.selectedId)
+          }
           onSenderSearchRequested: function(email) {
             root.backToList()
             if (root.service) root.service.search("from:" + email)
@@ -828,7 +945,8 @@ Item {
             anchors.centerIn: parent
             spacing: Style.space(6)
             Text {
-              text: "Reading " + (root.readTogetherIndex + 1)
+                text: (root.replyTogetherMode ? "Replying " : "Reading ")
+                + (root.readTogetherIndex + 1)
                 + " of " + root.readTogetherQueue.length
               color: root.foreground
               font.family: root.fontFamily
@@ -1354,13 +1472,16 @@ Item {
             BulkButton { label: "Paper Trail"; shortcut: "P"; onActivated: { root.bulkAct(function(id) { root.service.moveThread(id, "paper_trail") }) } }
             BulkButton { label: "Bubble Up"; shortcut: "Z"; onActivated: bulkBubbleMenu.open() }
             BulkButton { label: "Read Together"; shortcut: "O"; onActivated: root.startReadTogether() }
+            BulkButton { label: "Reply Together"; onActivated: root.startReplyTogether() }
           }
           Item { width: parent.width; implicitHeight: Style.space(5); PanelSeparator { anchors.verticalCenter: parent.verticalCenter; width: parent.width; foreground: root.foreground } }
           Row { spacing: Style.space(4)
             BulkButton { label: "Star"; shortcut: "S"; onActivated: { root.bulkAct(function(id) { root.service.toggleStar(id) }) } }
             BulkButton { label: "Archive"; onActivated: { root.bulkAct(function(id) { root.service.act(id, "archive") }) } }
             BulkButton { label: "Label\u2026"; shortcut: "B"; onActivated: { var ids = Object.keys(root.selectedIds); labelPicker.openForBulk(ids) } }
+            BulkButton { label: "Collection\u2026"; onActivated: { var ids = Object.keys(root.selectedIds); collectionPicker.openForBulk(ids) } }
             BulkButton { label: "Ignore"; onActivated: { root.bulkAct(function(id) { root.service.ignoreThread(id) }) } }
+            BulkButton { label: "Spam"; tone: root.urgent; onActivated: { root.bulkAct(function(id) { root.service.reportSpam(id) }) } }
             BulkButton { label: "Trash"; shortcut: "T"; tone: root.urgent; onActivated: { root.bulkAct(function(id) { root.service.act(id, "trash") }) } }
           }
         }
@@ -1395,6 +1516,154 @@ Item {
           BubbleRow { label: "Tomorrow"; hint: bubbleMenu.timeLabel(24 * 3600000); onActivated: bulkBubbleMenu.scheduleAll(24 * 3600000) }
           BubbleRow { property var sat: bubbleMenu.nextWeekday(6, 8); label: "This weekend"; hint: bubbleMenu.dateLabelFor(sat); onActivated: { var at = sat; root.bulkAct(function(id) { root.service.scheduleWorkflowBubble(id, at) }); bulkBubbleMenu.close() } }
           BubbleRow { property var mon: bubbleMenu.nextWeekday(1, 8); label: "Next week"; hint: bubbleMenu.dateLabelFor(mon); onActivated: { var at = mon; root.bulkAct(function(id) { root.service.scheduleWorkflowBubble(id, at) }); bulkBubbleMenu.close() } }
+        }
+      }
+
+      // ── Screener: Accept All bar ───────────────────────────────────────
+      Rectangle {
+        id: screenerBar
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: statusBar.top; anchors.bottomMargin: Style.space(10)
+        visible: !!root.service && root.service.workflowEnabled
+          && root.service.workflowKey === "screener"
+          && root.service.messages.length > 0
+          && root.currentView === "list"
+          && !root.showPage && !root.composing
+          && !root.multiSelectActive
+        z: 15
+        width: screenerBarRow.implicitWidth + Style.space(24)
+        height: Style.space(40)
+        radius: Style.space(12)
+        color: Color.popups.background; border.width: 1; border.color: Color.popups.border
+
+        Row {
+          id: screenerBarRow
+          anchors.centerIn: parent
+          spacing: Style.space(10)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.service
+              ? root.service.messages.length + (root.service.messages.length === 1
+                ? " sender" : " senders") + " to screen"
+              : ""
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: acceptAllLabel.implicitWidth + Style.space(18)
+            height: Style.space(28)
+            radius: Style.cornerRadius
+            color: acceptAllHover.hovered ? root.accent
+              : Qt.darker(root.accent, 1.15)
+
+            Text {
+              id: acceptAllLabel
+              anchors.centerIn: parent
+              text: "Accept All"
+              color: Qt.rgba(1, 1, 1, 1)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
+            HoverHandler { id: acceptAllHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: screenerConfirm.open() }
+          }
+        }
+      }
+
+      Popup {
+        id: screenerConfirm
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+        width: Style.space(340)
+        implicitHeight: screenerConfirmCol.implicitHeight + Style.space(16)
+        padding: Style.space(12); modal: true; focus: true; z: 60
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { radius: Style.cornerRadius; color: Color.popups.background; border.width: 1; border.color: Color.popups.border }
+
+        contentItem: Column {
+          id: screenerConfirmCol
+          spacing: Style.space(12)
+
+          Text {
+            width: parent.width
+            text: "Accept all " + (root.service ? root.service.messages.length : 0)
+              + " senders?"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+            wrapMode: Text.WordWrap
+          }
+
+          Text {
+            width: parent.width
+            text: "Every first-time sender currently in the Screener will be moved to Imbox."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+          }
+
+          Row {
+            anchors.right: parent.right
+            spacing: Style.space(8)
+
+            Rectangle {
+              width: cancelConfirmLabel.implicitWidth + Style.space(20)
+              height: Style.space(32)
+              radius: Style.cornerRadius
+              color: cancelConfirmHover.hovered
+                ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10)
+                : "transparent"
+              border.width: 1
+              border.color: Qt.rgba(root.foreground.r, root.foreground.g,
+                root.foreground.b, 0.25)
+
+              Text {
+                id: cancelConfirmLabel
+                anchors.centerIn: parent
+                text: "Cancel"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              HoverHandler { id: cancelConfirmHover; cursorShape: Qt.PointingHandCursor }
+              TapHandler { onTapped: screenerConfirm.close() }
+            }
+
+            Rectangle {
+              width: confirmAcceptLabel.implicitWidth + Style.space(20)
+              height: Style.space(32)
+              radius: Style.cornerRadius
+              color: confirmAcceptHover.hovered ? root.accent
+                : Qt.darker(root.accent, 1.15)
+
+              Text {
+                id: confirmAcceptLabel
+                anchors.centerIn: parent
+                text: "Accept All"
+                color: Qt.rgba(1, 1, 1, 1)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+              }
+
+              HoverHandler { id: confirmAcceptHover; cursorShape: Qt.PointingHandCursor }
+              TapHandler {
+                onTapped: {
+                  root.service.acceptAllScreener()
+                  screenerConfirm.close()
+                }
+              }
+            }
+          }
         }
       }
 
@@ -1451,7 +1720,9 @@ Item {
             QaRow { text: "Star"; shortcut: "S"; onActivated: { qaMenu.close(); if (root.service) root.service.toggleStar(quickActions.messageId) } }
             QaRow { text: "Archive"; onActivated: quickActions.run("archive") }
             QaRow { text: "Label\u2026"; shortcut: "B"; onActivated: { qaMenu.close(); labelPicker.openFor(quickActions.messageId) } }
+            QaRow { text: "Collection\u2026"; onActivated: { qaMenu.close(); collectionPicker.openFor(quickActions.messageId) } }
             QaRow { visible: !!root.service && root.service.workflowEnabled; text: "Ignore thread"; onActivated: { qaMenu.close(); if (root.service) root.service.ignoreThread(quickActions.messageId) } }
+            QaRow { text: "Report spam"; tone: root.urgent; onActivated: { qaMenu.close(); if (root.service) root.service.reportSpam(quickActions.messageId) } }
             QaRow { text: "Trash"; shortcut: "T"; tone: root.urgent; onActivated: quickActions.run("trash") }
             QaRow { text: "Open in browser"; tone: root.dim; onActivated: { qaMenu.close(); if (root.service) root.service.openInBrowser(quickActions.messageId) } }
           }
@@ -1506,6 +1777,174 @@ Item {
                 }
               }
               Text { visible: labelPicker.filteredLabels.length === 0; leftPadding: Style.space(9); topPadding: Style.space(8); bottomPadding: Style.space(8); text: "No labels found"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+            }
+          }
+        }
+      }
+
+      // ── Collection picker popup ───────────────────────────────────────
+
+      Popup {
+        id: collectionPicker
+        property string targetId: ""
+        property var targetIds: []
+        property bool bulk: false
+        property string filter: ""
+        property bool creating: false
+
+        function openFor(id) {
+          targetId = String(id || ""); targetIds = []; bulk = false
+          filter = ""; collFilterField.text = ""; creating = false; open()
+        }
+        function openForBulk(ids) {
+          targetId = ""; targetIds = ids; bulk = true
+          filter = ""; collFilterField.text = ""; creating = false; open()
+        }
+
+        readonly property var filteredCollections: {
+          if (!root.service) return []
+          var all = root.service.collectionLabels
+          var f = filter.toLowerCase()
+          if (f === "") return all
+          var result = []
+          for (var i = 0; i < all.length; i++) {
+            if (all[i].name.toLowerCase().indexOf(f) >= 0) result.push(all[i])
+          }
+          return result
+        }
+
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+        width: Style.space(300)
+        implicitHeight: Math.min(collPickerCol.implicitHeight + Style.space(8),
+          parent.height * 0.6)
+        padding: Style.space(4); modal: true; focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside; z: 50
+        background: Rectangle {
+          radius: Style.cornerRadius; color: Color.popups.background
+          border.width: 1; border.color: Color.popups.border
+        }
+
+        contentItem: Column {
+          id: collPickerCol; spacing: Style.space(4)
+
+          Text {
+            leftPadding: Style.space(6); topPadding: Style.space(4)
+            text: collectionPicker.creating ? "NEW COLLECTION" : "ADD TO COLLECTION"
+            color: root.dim; font.family: root.fontFamily
+            font.pixelSize: Style.font.caption; font.bold: true
+          }
+
+          TextField {
+            id: collFilterField
+            width: parent.width
+            placeholderText: collectionPicker.creating
+              ? "Collection name\u2026" : "Filter or create\u2026"
+            font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+            color: root.foreground; placeholderTextColor: root.dim
+            onTextChanged: collectionPicker.filter = text
+            Keys.onReturnPressed: {
+              if (collectionPicker.creating && text.trim() !== "") {
+                root.service.createCollection(text.trim(), function(label) {
+                  if (!label) return
+                  function applyToTargets() {
+                    if (collectionPicker.bulk) {
+                      for (var i = 0; i < collectionPicker.targetIds.length; i++)
+                        root.service.addToCollection(
+                          collectionPicker.targetIds[i], label.id)
+                    } else {
+                      root.service.addToCollection(
+                        collectionPicker.targetId, label.id)
+                    }
+                    collectionPicker.close()
+                  }
+                  applyToTargets()
+                })
+              }
+            }
+            background: Rectangle {
+              radius: Style.cornerRadius
+              color: Qt.rgba(root.foreground.r, root.foreground.g,
+                root.foreground.b, 0.06)
+              border.width: 1
+              border.color: Qt.rgba(root.foreground.r, root.foreground.g,
+                root.foreground.b, 0.15)
+            }
+          }
+
+          Flickable {
+            visible: !collectionPicker.creating
+            width: parent.width
+            height: Math.min(collListCol.implicitHeight,
+              collectionPicker.height - Style.space(100))
+            contentHeight: collListCol.implicitHeight; clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            Column {
+              id: collListCol; width: parent.width; spacing: Style.space(2)
+              Repeater {
+                model: collectionPicker.filteredCollections
+                Rectangle {
+                  required property var modelData
+                  required property int index
+                  width: collListCol.width
+                  implicitHeight: Style.spacing.popupRowHeight
+                  radius: Style.cornerRadius
+                  color: collHover.hovered
+                    ? Qt.rgba(root.foreground.r, root.foreground.g,
+                      root.foreground.b, 0.08) : "transparent"
+                  Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(9)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.name; color: root.foreground
+                    font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+                  }
+                  HoverHandler { id: collHover; cursorShape: Qt.PointingHandCursor }
+                  TapHandler {
+                    onTapped: {
+                      var lid = modelData.id
+                      if (collectionPicker.bulk) {
+                        var ids = collectionPicker.targetIds
+                        for (var i = 0; i < ids.length; i++)
+                          root.service.addToCollection(ids[i], lid)
+                      } else {
+                        root.service.addToCollection(
+                          collectionPicker.targetId, lid)
+                      }
+                      collectionPicker.close()
+                    }
+                  }
+                }
+              }
+              Text {
+                visible: collectionPicker.filteredCollections.length === 0
+                  && !collectionPicker.creating
+                leftPadding: Style.space(9); topPadding: Style.space(8)
+                bottomPadding: Style.space(8)
+                text: "No collections yet"
+                color: root.dim; font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+          }
+
+          Rectangle {
+            width: parent.width; implicitHeight: Style.space(32)
+            color: "transparent"; radius: Style.cornerRadius
+            Text {
+              anchors.centerIn: parent
+              text: collectionPicker.creating ? "Cancel" : "+ New collection"
+              color: root.accent; font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+            TapHandler {
+              onTapped: {
+                collectionPicker.creating = !collectionPicker.creating
+                collFilterField.text = ""
+                collFilterField.forceActiveFocus()
+              }
             }
           }
         }
@@ -1737,6 +2176,8 @@ Item {
 
       Keys.onEscapePressed: function(event) {
         if (root.shortcutHelpVisible) root.shortcutHelpVisible = false
+        else if (screenerConfirm.opened) screenerConfirm.close()
+        else if (collectionPicker.opened) collectionPicker.close()
         else if (labelPicker.opened) labelPicker.close()
         else if (qaMenu.opened) quickActions.close()
         else if (bulkBubbleMenu.opened) bulkBubbleMenu.close()
